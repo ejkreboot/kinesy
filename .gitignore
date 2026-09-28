@@ -1,0 +1,25 @@
+node_modules
+
+# Output
+/dist
+/dist-artifact
+
+# Asset pipeline
+/pipeline/.venv
+/pipeline/cache
+/pipeline/sources
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*

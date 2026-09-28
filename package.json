@@ -1,0 +1,26 @@
+{
+	"name": "kinesy",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Interactive 3D joint and muscle models for kinesiology study",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"build:artifact": "vite build --mode artifact",
+		"preview": "vite preview",
+		"check": "tsc --noEmit",
+		"validate": "tsx scripts/validate-deform.ts"
+	},
+	"dependencies": {
+		"three": "^0.186.1"
+	},
+	"devDependencies": {
+		"@types/node": "^26.6.3",
+		"@types/three": "^0.186.0",
+		"tsx": "^4.23.15",
+		"typescript": "^6.0.3",
+		"vite": "^8.3.1",
+		"vite-plugin-singlefile": "^2.3.3"
+	}
+}

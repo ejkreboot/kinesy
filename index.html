@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<title>Elbow Movers</title>
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" />
+	</head>
+	<body>
+		<div class="app">
+			<section class="stage" aria-label="3D joint model">
+				<canvas id="gl"></canvas>
+				<div class="loading" id="loading">Loading meshes…</div>
+				<div class="brand"><h1 id="title"></h1><p id="subtitle"></p></div>
+				<div class="stage-tools" id="stageTools"></div>
+				<div class="tip" id="tip" hidden></div>
+				<pre class="dbg" id="dbg" hidden></pre>
+				<div class="gonio" id="gonio"></div>
+			</section>
+
+			<aside class="side">
+				<div class="tabs" role="tablist" id="tabs">
+					<button role="tab" data-tab="explore" aria-selected="true" aria-controls="paneExplore">Explore</button>
+					<button role="tab" data-tab="quiz" aria-selected="false" aria-controls="paneQuiz">Quiz</button>
+					<button role="tab" data-tab="reference" aria-selected="false" aria-controls="paneReference" id="referenceTab">Reference</button>
+				</div>
+
+				<div class="pane" id="paneExplore" role="tabpanel">
+					<div>
+						<p class="eyebrow">Demonstrate a movement</p>
+						<div class="moves" id="moves"></div>
+						<p class="movenote" id="moveNote">Movers stay lit; everything else fades.</p>
+					</div>
+					<div id="infoCard" class="card"></div>
+					<div id="muscleList"></div>
+				</div>
+
+				<div class="pane" id="paneQuiz" role="tabpanel" hidden>
+					<div class="seg" id="quizMode" role="group" aria-label="Question type">
+						<button data-mode="mixed" aria-pressed="true">Mixed</button>
+						<button data-mode="identify" aria-pressed="false">Identify</button>
+						<button data-mode="movers" aria-pressed="false">Movers</button>
+						<button data-mode="recall" aria-pressed="false">Recall</button>
+					</div>
+					<div class="score"><span>Score <b id="score">0 / 0</b></span><span>Streak <b id="streak">0</b></span></div>
+					<div id="quizBox"></div>
+				</div>
+
+				<div class="pane jt" id="paneReference" role="tabpanel" hidden></div>
+			</aside>
+		</div>
+		<script type="module" src="/src/main.ts"></script>
+	</body>
+</html>
