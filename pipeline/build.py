@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import trimesh
 from scipy.spatial import cKDTree
 
 ROOT = Path(__file__).resolve().parent
@@ -31,12 +32,24 @@ def fit_axes(cfg, src, axes_path, refit):
         return json.loads(axes_path.read_text())
     out = {'_frame': 'BodyParts3D source frame (mm). Fitted by pipeline/lib/axes.py; regenerate with --refit-axes.'}
     for name, spec in cfg.AXES.items():
-        fitter = FITTERS[spec['fit']]
-        point, d, err = fitter(src.load(spec['fixed']), src.load(spec['moving']))
+        point, d, err = FITTERS[spec['fit']](src, spec)
         print(f'  axis {name:10s} point {np.round(point, 2)} dir {np.round(d, 3)} residual {err:.3f}')
         out[name] = {'point': point.tolist(), 'dir': d.tolist()}
     axes_path.write_text(json.dumps(out, indent=1))
     return out
+
+
+def load_bone(src, fma, faces):
+    """A bone mesh from one FMA id or several merged (each decimated in proportion to its size).
+    Returns (full-resolution mesh, display mesh)."""
+    if isinstance(fma, str):
+        full = src.load(fma)
+        return full, decimate(full, faces)
+    parts = [src.load(f) for f in fma]
+    total = sum(len(p.faces) for p in parts)
+    full = trimesh.util.concatenate(parts)
+    shown = [decimate(p, None if faces is None else max(200, round(faces * len(p.faces) / total))) for p in parts]
+    return full, trimesh.util.concatenate(shown)
 
 
 class Packer:
@@ -64,8 +77,8 @@ def build(joint: str, refit: bool):
     print('bones')
     bones, samples = {}, {i: [] for i in range(nb)}
     for name, fma, bone, faces in cfg.BONE_MESHES:
-        full = src.load(fma)
-        bones[name] = (decimate(full, faces), bone_id[bone])
+        full, shown = load_bone(src, fma, faces)
+        bones[name] = (shown, bone_id[bone])
         samples[bone_id[bone]].append(sample(full, 40000))
     trees = {b: cKDTree(np.vstack(s)) for b, s in samples.items() if s}
 
@@ -105,7 +118,7 @@ def build(joint: str, refit: bool):
     for bone, opts in cfg.FIELDS.items():
         mesh_name = next(n for n, _, b, _ in cfg.BONE_MESHES if b == bone and n == bone)
         m = bones[mesh_name][0]
-        data, ent = sdf_grid(Vv[mesh_name], m.faces, opts.get('ymax'))
+        data, ent = sdf_grid(Vv[mesh_name], m.faces, opts)
         ent['bone'] = bone_id[bone]
         ent['off'] = fld.add(data)
         fields[bone] = ent

@@ -1,3 +1,4 @@
+import { Vector3 } from 'three';
 import { loadJointAssets } from './core/load';
 import { Rig } from './core/rig';
 import type { JointModule, MuscleInfo } from './joints/types';
@@ -11,9 +12,18 @@ import { PoseAnimator } from './viewer/animator';
 import { JointModel } from './viewer/model';
 import { Stage } from './viewer/stage';
 
-/** Mount the viewer + study UI for one joint into the page shell in index.html. */
-export async function mountJoint(joint: JointModule): Promise<void> {
-	const debug = new DebugOverlay($('dbg'));
+export interface MountedJoint {
+	/** stop rendering and release the GL context and window listeners */
+	dispose(): void;
+}
+
+/**
+ * Mount the viewer + study UI for one joint into the page shell in index.html. To switch
+ * joints, dispose the mounted one and replace the shell with a fresh copy before mounting again.
+ */
+export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
+	const teardown = new AbortController();
+	const debug = new DebugOverlay($('dbg'), teardown.signal);
 	document.title = joint.title;
 	$('title').textContent = joint.title;
 	$('subtitle').textContent = joint.subtitle;
@@ -22,8 +32,18 @@ export async function mountJoint(joint: JointModule): Promise<void> {
 
 	const stage = new Stage($<HTMLCanvasElement>('gl'));
 	stage.onFrame((dt) => debug.frame(dt));
+	const dispose = () => {
+		teardown.abort();
+		stage.dispose();
+	};
 
-	const assets = await loadJointAssets(joint.assets);
+	let assets;
+	try {
+		assets = await loadJointAssets(joint.assets);
+	} catch (e) {
+		dispose();
+		throw e;
+	}
 	debug.msg('assets decoded');
 	const rig = new Rig(joint.rig, assets.manifest.axes, assets.manifest.bones);
 	const model = new JointModel(stage, assets, rig, joint.muscles);
@@ -33,19 +53,25 @@ export async function mountJoint(joint: JointModule): Promise<void> {
 	$('loading').hidden = true;
 
 	// ---- pose: sliders + animator ----
+	const readout = joint.readout ? Object.assign(document.createElement('p'), { className: 'readout' }) : null;
+	const sync = () => {
+		controls.sync(model.pose);
+		if (readout) readout.textContent = joint.readout!(model.pose);
+	};
 	const controls = new PoseControls($('gonio'), rig, joint.controls, (j, v) => {
 		animator.cancel();
 		model.setPose({ [j]: v });
-		controls.sync(model.pose);
+		sync();
 	});
+	if (readout) $('gonio').append(readout);
 	const animator = new PoseAnimator(
 		() => model.pose,
 		(p) => {
 			model.setPose(p);
-			controls.sync(model.pose);
+			sync();
 		}
 	);
-	controls.sync(model.pose);
+	sync();
 
 	// ---- stage toolbar ----
 	const tools = $('stageTools');
@@ -55,11 +81,26 @@ export async function mountJoint(joint: JointModule): Promise<void> {
 		model.setBoneMeshVisible(t.mesh, t.initial, t.opacity);
 		tools.append(toggleButton(t.label, t.initial, (on) => model.setBoneMeshVisible(t.mesh, on)));
 	}
-	const reset = document.createElement('button');
-	reset.className = 'chipbtn';
-	reset.textContent = 'Reset view';
-	reset.addEventListener('click', () => stage.resetView());
-	tools.append(reset);
+	if (joint.views?.length) {
+		// segmented view picker; pressing the current view resets it
+		const seg = document.createElement('div');
+		seg.className = 'chipseg';
+		seg.setAttribute('role', 'group');
+		seg.setAttribute('aria-label', 'Camera view');
+		for (const v of joint.views) {
+			const b = document.createElement('button');
+			b.textContent = v.label;
+			b.addEventListener('click', () => stage.flyTo(v.preset));
+			seg.append(b);
+		}
+		tools.append(seg);
+	} else {
+		const reset = document.createElement('button');
+		reset.className = 'chipbtn';
+		reset.textContent = 'Reset view';
+		reset.addEventListener('click', () => stage.resetView());
+		tools.append(reset);
+	}
 
 	const byKey = new Map<string, MuscleInfo>(joint.muscles.map((m) => [m.key, m]));
 	const ctx: AppContext = {
@@ -75,7 +116,14 @@ export async function mountJoint(joint: JointModule): Promise<void> {
 			axesBtn.setAttribute('aria-pressed', String(on));
 			model.setAxesVisible(on);
 		},
-		playMovement: (m) => animator.play(m.from, m.to)
+		playMovement: (m) => animator.play(m.from, m.to),
+		faceMuscle: (k) => {
+			const name = byKey.get(k)?.view;
+			const v = name ? joint.views?.find((x) => x.label === name) : undefined;
+			if (!v) return;
+			// leave the camera alone if it already looks at that side
+			if (stage.viewDir().dot(new Vector3(...v.preset.dir).normalize()) < 0.35) stage.flyTo(v.preset);
+		}
 	};
 
 	// ---- panels + tabs ----
@@ -129,4 +177,10 @@ export async function mountJoint(joint: JointModule): Promise<void> {
 
 	panels.explore!.activate();
 	debug.msg('ready');
+	return {
+		dispose: () => {
+			animator.cancel();
+			dispose();
+		}
+	};
 }

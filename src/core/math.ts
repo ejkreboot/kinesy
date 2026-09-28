@@ -67,6 +67,11 @@ export function rigidCompose(a: Rigid, b: Rigid): Rigid {
 	return { q: qMul(a.q, b.q), t: [tb[0] + a.t[0], tb[1] + a.t[1], tb[2] + a.t[2]] };
 }
 
+export function rigidApply(r: Rigid, p: Vec3): Vec3 {
+	const v = qRotate(r.q, p);
+	return [v[0] + r.t[0], v[1] + r.t[1], v[2] + r.t[2]];
+}
+
 /** Rotation of `angle` radians about the line through `point` along unit `dir`. */
 export function rigidAboutAxis(point: Vec3, dir: Vec3, angle: number): Rigid {
 	const q = qAxis(dir, angle);

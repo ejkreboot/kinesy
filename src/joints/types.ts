@@ -22,6 +22,13 @@ export interface JointModule {
 	/** joint axes drawn by the "Joint axes" toggle */
 	axisOverlays: AxisOverlay[];
 	view: ViewPreset;
+	/**
+	 * named camera presets shown as toolbar buttons in place of "Reset view"; the first should
+	 * match `view`. Muscles can name one to be seen from (`MuscleInfo.view`).
+	 */
+	views?: NamedView[];
+	/** one line under the sliders describing the pose (e.g. how elevation splits between joints) */
+	readout?: (pose: Pose) => string;
 	/** pose to move to before an identify question if the current one hides muscles, else null */
 	readablePose?: (pose: Pose) => Pose | null;
 	/** HTML for the reference tab */
@@ -57,6 +64,8 @@ export interface MuscleInfo {
 	actionLong: string;
 	nerve: string;
 	note: string;
+	/** name of a view in `JointModule.views` the muscle is visible from */
+	view?: string;
 }
 
 export interface Movement {
@@ -70,6 +79,10 @@ export interface Movement {
 	/** muscle keys */
 	prime: string[];
 	assist: string[];
+	/** heading the demo button is listed under (buttons keep their order within a group) */
+	group?: string;
+	/** extra line shown with the movers while the demo plays */
+	note?: string;
 }
 
 export interface Scenario {
@@ -99,6 +112,11 @@ export interface AxisOverlay {
 	length: number;
 	/** shift of the drawn segment's midpoint along the axis from the axis point, mm */
 	offset?: number;
+}
+
+export interface NamedView {
+	label: string;
+	preset: ViewPreset;
 }
 
 export interface ViewPreset {

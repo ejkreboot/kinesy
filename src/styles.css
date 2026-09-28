@@ -33,14 +33,25 @@ button{cursor:pointer}
 .brand{position:absolute;left:16px;top:14px;pointer-events:none}
 .brand h1{margin:0;font:700 26px/1 var(--f-disp);letter-spacing:.04em;text-transform:uppercase}
 .brand p{margin:4px 0 0;font:500 12px/1.3 var(--f-mono);color:var(--muted)}
+.picker{pointer-events:auto;display:inline-flex;align-items:center;gap:6px;margin:0 0 6px;font:600 11.5px/1 var(--f-disp);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.picker select{appearance:none;font:600 13px/1 var(--f-body);letter-spacing:0;text-transform:none;color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:5px 30px 5px 11px;min-width:118px;
+  /* chevron from two triangles, so it follows the theme's muted color */
+  background-color:color-mix(in srgb,var(--panel) 88%,transparent);
+  background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+  background-position:calc(100% - 17px) 55%,calc(100% - 12px) 55%;background-size:5px 5px;background-repeat:no-repeat}
 .stage-tools{position:absolute;right:12px;top:12px;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:60%}
 .chipbtn{border:1px solid var(--line);background:color-mix(in srgb,var(--panel) 88%,transparent);border-radius:999px;padding:5px 11px;font-size:12.5px;font-weight:500}
 .chipbtn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.chipseg{display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:color-mix(in srgb,var(--panel) 88%,transparent)}
+.chipseg button{border:0;border-right:1px solid var(--line);background:none;padding:5px 10px;font-size:12.5px;font-weight:500}
+.chipseg button:last-child{border-right:0}
+.chipseg button:hover{background:var(--accent-soft)}
 .gonio{position:absolute;left:12px;right:12px;bottom:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;
   background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:10px;padding:10px 14px;backdrop-filter:blur(6px)}
 .gonio label{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font:600 13px/1.2 var(--f-disp);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .gonio output{font:500 15px/1 var(--f-mono);color:var(--ink);letter-spacing:0;text-transform:none;font-variant-numeric:tabular-nums}
 .gonio input[type=range]{width:100%;accent-color:var(--accent);margin:6px 0 0}
+.readout{grid-column:1/-1;margin:0;font:500 12.5px/1.3 var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
 .scale{display:flex;justify-content:space-between;font:400 10.5px/1 var(--f-mono);color:var(--faint);margin-top:2px}
 .tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--ground);font:500 12.5px/1.2 var(--f-body);padding:4px 8px;border-radius:5px;transform:translate(12px,-120%);white-space:nowrap}
 .dbg{position:absolute;left:12px;top:70px;margin:0;padding:6px 8px;background:var(--ink);color:var(--ground);font:11px/1.35 var(--f-mono);border-radius:6px;max-width:70%;white-space:pre-wrap;z-index:5}
@@ -60,6 +71,9 @@ button{cursor:pointer}
 .btn.primary small{color:inherit;opacity:.8}
 .movenote{margin-top:8px;font-size:13.5px;color:var(--muted);min-height:1.5em}
 .movenote b{color:var(--ink);font-weight:600}
+.movenote .aside{display:block;margin-top:4px}
+.moves h3{grid-column:1/-1;margin:6px 0 0;font:600 13px/1 var(--f-disp);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.moves h3:first-child{margin-top:0}
 
 .group h3{margin:10px 0 4px;font:600 13px/1 var(--f-disp);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
 .mrow{display:flex;align-items:center;gap:8px;border-radius:7px;padding:2px 4px}
@@ -111,11 +125,18 @@ p{margin:0}
 
 @media (max-width:860px){
   .app{grid-template-columns:1fr;height:auto}
-  .stage{height:62vh;min-height:360px}
+  /* the 3D view keeps a fixed height; the sliders sit below it instead of covering it */
+  .stage{height:auto;padding-top:max(58vh,340px)}
+  #gl{height:max(58vh,340px);bottom:auto}
   .side{border-left:0;border-top:1px solid var(--line)}
   .pane{overflow:visible}
-  .gonio{grid-template-columns:1fr;gap:6px;padding:8px 12px}
-  .stage-tools{top:auto;bottom:128px;right:12px;max-width:none}
+  .gonio{position:static;grid-template-columns:1fr 1fr;gap:6px 14px;padding:8px 12px;margin:0 12px 12px}
+  .gonio label{font-size:12px;letter-spacing:.06em}
+  .gonio output{font-size:13px}
+  .scale{font-size:9.5px}
+  .stage-tools{top:12px;right:12px;flex-direction:column;align-items:flex-end;max-width:none}
+  .chipseg button{padding:5px 8px}
+  .brand{right:136px}
   .brand h1{font-size:22px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}

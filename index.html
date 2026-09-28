@@ -3,7 +3,7 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-		<title>Elbow Movers</title>
+		<title>Joint Movers</title>
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 		<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" />
@@ -13,7 +13,11 @@
 			<section class="stage" aria-label="3D joint model">
 				<canvas id="gl"></canvas>
 				<div class="loading" id="loading">Loading meshes…</div>
-				<div class="brand"><h1 id="title"></h1><p id="subtitle"></p></div>
+				<div class="brand">
+					<label class="picker"><span>Joint</span><select id="jointPicker"></select></label>
+					<h1 id="title"></h1>
+					<p id="subtitle"></p>
+				</div>
 				<div class="stage-tools" id="stageTools"></div>
 				<div class="tip" id="tip" hidden></div>
 				<pre class="dbg" id="dbg" hidden></pre>

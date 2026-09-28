@@ -4,9 +4,12 @@ hinge_congruence: find the axis about which the moving bone's articular surface 
     constant gap from the fixed bone through the whole arc (e.g. trochlear notch on trochlea).
 pivot_centers: axis through the center of the moving bone's proximal head (circle fit) and the
     fixed bone's distal head (sphere fit), nudged to avoid bony collision (e.g. forearm rotation).
+anatomical: a fitted joint center (e.g. the humeral head's sphere center) with a direction given
+    in body coordinates or taken from bone geometry (e.g. the humeral shaft); for ball-and-socket
+    and gliding joints, whose axes are conventions rather than properties of the surfaces.
 
-Both return (point, unit dir) with the sign chosen so that positive rotation moves the moving
-bone's distal tip toward `positive_toward`.
+All return (point, unit dir) with the sign chosen so that positive rotation moves the moving
+bone's distal tip (or the named `tip`) toward `positive_toward`.
 """
 import numpy as np
 from scipy.optimize import minimize
@@ -87,4 +90,76 @@ def pivot_centers(fixed, moving, positive_toward=(0, -1, 0), check_deg=(20, 45, 
     return b, _orient(b, d, moving, np.asarray(positive_toward)), float(r.fun)
 
 
-FITTERS = {'hinge_congruence': hinge_congruence, 'pivot_centers': pivot_centers}
+def _sphere(P):
+    s = np.linalg.lstsq(np.c_[2 * P, np.ones(len(P))], (P ** 2).sum(1), rcond=None)[0]
+    c = s[:3]
+    return c, float(np.sqrt(s[3] + c @ c))
+
+
+def _humeral_head(fixed, moving):
+    """Sphere fit to the humeral head: seeded by the patch facing the glenoid, then refined on the
+    whole proximal surface lying near the sphere."""
+    Ms = sample(moving, 40000)
+    dist = cKDTree(sample(fixed, 40000)).query(Ms)[0]
+    c, r = _sphere(Ms[dist < dist.min() + 6])
+    for _ in range(4):
+        near = Ms[(np.abs(np.linalg.norm(Ms - c, axis=1) - r) < 2.5) & (Ms[:, 2] > c[2] - 0.6 * r)]
+        c, r = _sphere(near)
+    err = np.abs(np.linalg.norm(near - c, axis=1) - r).mean()
+    print(f'    humeral head radius {r:.1f} mm, fit residual {err:.2f} mm ({len(near)} pts)')
+    return c
+
+
+def _clavicle_medial_end(fixed, moving):
+    V = moving.vertices  # right side: medial = larger x
+    return V[V[:, 0] > V[:, 0].max() - 8].mean(0)
+
+
+def _acromioclavicular(fixed, moving):
+    """Center of the clavicle's lateral facet: its vertices close to the acromion."""
+    V = fixed.vertices
+    lat = V[V[:, 0] < V[:, 0].min() + 25]
+    d = cKDTree(sample(moving, 60000)).query(lat)[0]
+    return lat[d < d.min() + 3].mean(0)
+
+
+def _distal_center(m):
+    low = m.vertices[m.vertices[:, 2] < m.bounds[0][2] + 45]
+    return (low[low[:, 0].argmin()] + low[low[:, 0].argmax()]) / 2
+
+
+CENTERS = {'humeral_head': _humeral_head, 'clavicle_medial_end': _clavicle_medial_end,
+           'acromioclavicular': _acromioclavicular}
+
+TIPS = {
+    'lowest': lambda m: m.vertices[m.vertices[:, 2].argmin()],
+    'lateral': lambda m: m.vertices[m.vertices[:, 0].argmin()],
+    'lateral_epicondyle': lambda m: (lambda low: low[low[:, 0].argmin()])(m.vertices[m.vertices[:, 2] < m.bounds[0][2] + 45]),
+}
+
+
+def anatomical(src, spec):
+    fixed = src.load(spec['fixed']) if 'fixed' in spec else None
+    moving = src.load(spec['moving'])
+    point = CENTERS[spec['center']](fixed, moving)
+    d = spec['dir']
+    if d == 'humeral_shaft':
+        d = point - _distal_center(moving)
+    elif d == 'plane_normal':
+        S = sample(moving, 30000)
+        d = np.linalg.svd(S - S.mean(0), full_matrices=False)[2][2]
+    d = np.asarray(d, dtype=float)
+    d /= np.linalg.norm(d)
+    tip = TIPS[spec.get('tip', 'lowest')](moving)
+    step = _rot(tip[None], point, d, 0.2)[0] - tip
+    if np.dot(step, spec['toward']) < 0:
+        d = -d
+    return point, d, 0.0
+
+
+# fitter(src, spec) -> (point, dir, residual), source frame
+FITTERS = {
+    'hinge_congruence': lambda src, s: hinge_congruence(src.load(s['fixed']), src.load(s['moving'])),
+    'pivot_centers': lambda src, s: pivot_centers(src.load(s['fixed']), src.load(s['moving'])),
+    'anatomical': anatomical,
+}

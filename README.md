@@ -2,7 +2,8 @@
 
 Interactive 3D joint and muscle models for kinesiology study. Each joint gets a posable model
 built from real anatomical meshes, movement demos that light up the prime movers, and a quiz
-(identify, recall, movers). The elbow is the first joint.
+(identify, recall, movers). Joints so far: shoulder and elbow, each shown on its own and chosen
+with the picker (`?joint=shoulder` in the URL also works; the last choice is remembered).
 
 ## Commands
 
@@ -21,7 +22,8 @@ npm run validate         # deformer check: bone penetration by pose, timing, bul
 src/
   core/            framework-free; runs in the browser and in Node
     math.ts        vectors, quaternions, rigid transforms
-    rig.ts         kinematic chain: bones, joints (axis, rest angle, range), pose -> transforms
+    rig.ts         kinematic chain: bones carrying one or more joints (axis, rest angle, range,
+                   optional coupling), pose -> transforms
     deformer.ts    dual-quaternion skinning + constant-volume bulge + bone collision
     sdf.ts         signed-distance-field sampling
     assets.ts      decode the packed joint format (types.ts documents it)
@@ -36,8 +38,10 @@ src/
     controls.ts    one slider per joint degree of freedom
   joints/
     types.ts       JointModule: everything the app needs for one joint
+    shoulder/      rig (with scapulohumeral rhythm), muscles, movements, scenarios, reference
     elbow/         rig, muscles, movements, quiz scenarios, reference tab
   app.ts           wires a JointModule into the page shell (index.html)
+  main.ts          joint picker; mounts one joint at a time
 assets/<joint>/    manifest.json, geometry.bin.gz, fields.bin.gz (generated)
 pipeline/          Python: source meshes -> assets (see pipeline/README.md)
 scripts/           Node tooling (tsx)
@@ -49,8 +53,17 @@ scripts/           Node tooling (tsx)
 2. `python pipeline/fetch_sources.py <joint>` then `python pipeline/build.py <joint> --refit-axes`.
 3. `src/joints/<joint>/`: `rig.ts` (bone chain, rest angles, ranges), `content.ts` (muscles,
    movements, scenarios), `reference.ts`, and `index.ts` exporting a `JointModule`.
-4. Register the rig in `scripts/validate-deform.ts` and run `npm run validate -- <joint>`.
-5. Point `src/main.ts` at it (or add a joint picker).
+4. Register the rig and test poses in `scripts/validate-deform.ts` and run
+   `npm run validate -- <joint>`.
+5. Add it to `JOINTS` in `src/main.ts` (the picker lists joints in that order; the first is the
+   default).
+
+Each joint is its own model: include only the bones and muscles relevant to it (muscles that
+cross it belong; neighbouring joints do not).
+
+A bone can carry several joints (`joints: [...]`, outermost first), and `frame: 'root'` poses a
+ball joint against the trunk while it rides a moving parent (the shoulder's humerus on the
+scapula). A joint's `coupled(pose)` adds motion driven by other joints (scapulohumeral rhythm).
 
 ## Licensing
 

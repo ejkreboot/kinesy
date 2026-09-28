@@ -31,6 +31,8 @@ const FIELDS: [RecallField, string][] = [
 	['origin', 'Where does it arise?']
 ];
 const MIX: Exclude<QuizMode, 'mixed'>[] = ['identify', 'identify', 'recall', 'recall', 'movers'];
+/** most options a movers question lists; joints with more muscles get a sample (movers always in) */
+const MOVER_OPTIONS = 10;
 
 /** Identify / recall / movers questions generated from the joint's content. */
 export class QuizPanel implements Panel {
@@ -117,9 +119,12 @@ export class QuizPanel implements Panel {
 	private movers(): Question {
 		const mv = pick(this.ctx.joint.movements);
 		const name = (k: string) => this.ctx.muscle(k).name;
+		const movers = new Set([...mv.prime, ...mv.assist]);
+		const others = pickN(this.muscles.filter((m) => !movers.has(m.key)), Math.max(0, MOVER_OPTIONS - movers.size));
+		const shown = new Set([...movers, ...others.map((m) => m.key)]);
 		return {
 			type: 'Movers', text: `Watch the movement. Select all prime movers for ${mv.label.toLowerCase()}.`,
-			options: this.muscles.map((m) => m.name), movement: mv, prime: mv.prime.map(name), assist: mv.assist.map(name)
+			options: this.muscles.filter((m) => shown.has(m.key)).map((m) => m.name), movement: mv, prime: mv.prime.map(name), assist: mv.assist.map(name)
 		};
 	}
 
@@ -150,7 +155,7 @@ export class QuizPanel implements Panel {
 		this.answered = true;
 		this.score(ok);
 		let fb = ok ? '<b>Correct.</b> ' : '<b>Not quite.</b> ';
-		fb += `Prime movers: <b>${prime.join(', ')}</b>. Assisting: ${assist.join(', ')}.`;
+		fb += `Prime movers: <b>${prime.join(', ')}</b>.` + (assist.length ? ` Assisting: ${assist.join(', ')}.` : '');
 		if (missing.length) fb += ` Missed: ${missing.join(', ')}.`;
 		if (extra.length) fb += ` Not a mover here: ${extra.join(', ')}.`;
 		this.feedback = fb;
@@ -213,6 +218,8 @@ export class QuizPanel implements Panel {
 		else if (q.type === 'Identify') {
 			const p = this.ctx.joint.readablePose?.(this.ctx.model.pose);
 			if (p) void this.ctx.animator.to(p, 500);
+			const key = q.key ?? (q.focus?.parts && this.muscles.find((m) => m.meshes.includes(q.focus!.parts![0]))?.key);
+			if (key) this.ctx.faceMuscle(key);
 		}
 	}
 }

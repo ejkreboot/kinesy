@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Deformer } from '../core/deformer';
+import { rigidToMat4 } from '../core/math';
 import type { Pose, Rig } from '../core/rig';
 import type { JointAssets } from '../core/types';
 import type { MuscleInfo } from '../joints/types';
@@ -30,7 +31,7 @@ export class JointModel {
 	private readonly owner = new Map<string, string>();
 	private readonly info = new Map<string, MuscleInfo>();
 	private readonly out: Record<string, Float32Array> = {};
-	private readonly axisLines: { mesh: THREE.Mesh; bone: number; base: THREE.Matrix4 }[] = [];
+	private readonly axisLines: { mesh: THREE.Mesh; joint: number; base: THREE.Matrix4 }[] = [];
 	private readonly visible = new Map<string, boolean>();
 	private focus: Focus | null = null;
 	private xray = false;
@@ -76,11 +77,10 @@ export class JointModel {
 		this.stage.requestRender();
 	}
 
-	/** Axis overlay for a joint, riding on the given bone's parent. */
+	/** Axis overlay for a joint, riding on the frame its axis is expressed in. */
 	addAxis(jointId: string, color: number, length: number, offset = 0): void {
 		const ax = this.rig.axis(jointId);
-		const boneIdx = this.rig.def.bones.findIndex((b) => b.joint === jointId);
-		const parent = boneIdx >= 0 ? this.rig.def.bones[boneIdx].parent : -1;
+		const joint = this.rig.def.joints.findIndex((j) => j.id === jointId);
 		const dir = new THREE.Vector3(...ax.dir);
 		const mid = new THREE.Vector3(...ax.point).addScaledVector(dir, offset);
 		const g = new THREE.CylinderGeometry(1.4, 1.4, length, 10).rotateX(Math.PI / 2);
@@ -91,7 +91,7 @@ export class JointModel {
 		const base = new THREE.Matrix4().compose(mid, new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir), new THREE.Vector3(1, 1, 1));
 		mesh.matrix.copy(base);
 		this.stage.scene.add(mesh);
-		this.axisLines.push({ mesh, bone: Math.max(0, parent), base });
+		this.axisLines.push({ mesh, joint, base });
 		this.dirty = true;
 	}
 
@@ -160,7 +160,10 @@ export class JointModel {
 		this.deformer.update(this.pose, this.out);
 		const mats = this.rig.def.bones.map((_, i) => new THREE.Matrix4().fromArray(this.deformer.boneMatrix(i)));
 		for (const m of this.boneMeshes.values()) m.matrix.copy(mats[m.userData.bone as number]);
-		for (const a of this.axisLines) a.mesh.matrix.copy(mats[a.bone]).multiply(a.base);
+		if (this.axisLines.length) {
+			const frames = this.rig.solveFrames(this.pose).joints;
+			for (const a of this.axisLines) a.mesh.matrix.fromArray(rigidToMat4(frames[a.joint])).multiply(a.base);
+		}
 		for (const m of this.muscleMeshes.values()) {
 			const g = m.geometry;
 			g.attributes.position.needsUpdate = true;

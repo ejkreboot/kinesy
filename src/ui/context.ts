@@ -11,6 +11,8 @@ export interface AppContext {
 	/** show joint axes and reflect it in the toolbar */
 	setAxesVisible(on: boolean): void;
 	playMovement(m: Movement): Promise<boolean>;
+	/** turn the camera to the muscle's preferred view if it is on the far side */
+	faceMuscle(key: string): void;
 }
 
 /** A side-panel tab. The app re-applies a panel's focus when it becomes active. */

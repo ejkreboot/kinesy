@@ -8,10 +8,10 @@ export class DebugOverlay {
 	private poseMs = 0;
 	private worstFrame = 0;
 
-	constructor(private readonly el: HTMLElement) {
+	constructor(private readonly el: HTMLElement, signal?: AbortSignal) {
 		this.on = location.hash === '#debug';
-		window.addEventListener('error', (e) => this.error(`ERROR ${e.message} @${e.lineno}`));
-		window.addEventListener('unhandledrejection', (e) => this.error(`REJECT ${(e.reason as Error)?.message ?? e.reason}`));
+		window.addEventListener('error', (e) => this.error(`ERROR ${e.message} @${e.lineno}`), { signal });
+		window.addEventListener('unhandledrejection', (e) => this.error(`REJECT ${(e.reason as Error)?.message ?? e.reason}`), { signal });
 	}
 
 	msg(text: string): void {

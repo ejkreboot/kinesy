@@ -3,8 +3,8 @@ import type { RigDef } from '../../core/rig';
 export const elbowRig: RigDef = {
 	bones: [
 		{ name: 'humerus', parent: -1 },
-		{ name: 'ulna', parent: 0, joint: 'flexion' },
-		{ name: 'radius', parent: 1, joint: 'pronation' }
+		{ name: 'ulna', parent: 0, joints: ['flexion'] },
+		{ name: 'radius', parent: 1, joints: ['pronation'] }
 	],
 	joints: [
 		// meshes were captured at 15° flexion, forearm fully supinated

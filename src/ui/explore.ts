@@ -39,7 +39,13 @@ export class ExplorePanel implements Panel {
 
 	private buildMoves(): void {
 		const box = $('moves');
+		let group: string | undefined;
 		for (const mv of this.ctx.joint.movements) {
+			if (mv.group && mv.group !== group) {
+				const h = document.createElement('h3');
+				h.textContent = group = mv.group;
+				box.append(h);
+			}
 			const b = document.createElement('button');
 			b.className = 'btn';
 			b.innerHTML = `${mv.label}<small>${mv.range}</small>`;
@@ -47,7 +53,9 @@ export class ExplorePanel implements Panel {
 				this.select(null);
 				this.focus = { muscles: [...mv.prime, ...mv.assist] };
 				this.ctx.model.setFocus(this.focus);
-				this.note.innerHTML = `<b>${mv.label}.</b> Prime movers: <b>${names(this.ctx, mv.prime)}</b>. Assisting: ${names(this.ctx, mv.assist)}.`;
+				const assist = mv.assist.length ? ` Assisting: ${names(this.ctx, mv.assist)}.` : '';
+				const aside = mv.note ? `<span class="aside">${mv.note}</span>` : '';
+				this.note.innerHTML = `<b>${mv.label}.</b> Prime movers: <b>${names(this.ctx, mv.prime)}</b>.${assist}${aside}`;
 				void this.ctx.playMovement(mv);
 			});
 			box.append(b);
@@ -76,7 +84,11 @@ export class ExplorePanel implements Panel {
 				const on = b.getAttribute('aria-pressed') !== 'true';
 				b.setAttribute('aria-pressed', String(on));
 				this.ctx.model.setMuscleVisible(k, on);
-			} else this.select(this.selected === k ? null : k);
+			} else {
+				const next = this.selected === k ? null : k;
+				this.select(next);
+				if (next) this.ctx.faceMuscle(next);
+			}
 		});
 	}
 

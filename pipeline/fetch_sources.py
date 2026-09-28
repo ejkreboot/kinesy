@@ -24,7 +24,8 @@ def run(*args, cwd=None):
 
 def main(joint: str):
     cfg = importlib.import_module(f'pipeline.joints.{joint}')
-    ids = sorted({f for _, f, *_ in cfg.BONE_MESHES} | {f for _, f, _ in cfg.MUSCLES})
+    bone_ids = {i for _, f, *_ in cfg.BONE_MESHES for i in ([f] if isinstance(f, str) else f)}
+    ids = sorted(bone_ids | {f for _, f, _ in cfg.MUSCLES})
     repo = DEST / 'repo'
     if not (repo / '.git').exists():
         repo.parent.mkdir(parents=True, exist_ok=True)
