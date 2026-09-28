@@ -2,7 +2,7 @@
 
 Interactive 3D joint and muscle models for kinesiology study. Each joint gets a posable model
 built from real anatomical meshes, movement demos that light up the prime movers, and a quiz
-(identify, recall, movers). Joints so far: shoulder and elbow, each shown on its own and chosen
+(identify, recall, movers). Joints so far: shoulder, elbow, and wrist & hand, each shown on its own and chosen
 with the picker (`?joint=shoulder` in the URL also works; the last choice is remembered).
 
 ## Commands
@@ -39,6 +39,7 @@ src/
   joints/
     types.ts       JointModule: everything the app needs for one joint
     shoulder/      rig (with scapulohumeral rhythm), muscles, movements, scenarios, reference
+    hand/          wrist, thumb, and fingers (17 bones; shared finger sliders)
     elbow/         rig, muscles, movements, quiz scenarios, reference tab
   app.ts           wires a JointModule into the page shell (index.html)
   main.ts          joint picker; mounts one joint at a time
@@ -55,15 +56,17 @@ scripts/           Node tooling (tsx)
    movements, scenarios), `reference.ts`, and `index.ts` exporting a `JointModule`.
 4. Register the rig and test poses in `scripts/validate-deform.ts` and run
    `npm run validate -- <joint>`.
-5. Add it to `JOINTS` in `src/main.ts` (the picker lists joints in that order; the first is the
-   default).
+5. Add it to `JOINTS` in `src/main.ts` (the picker lists joints in that order, proximal to
+   distal; `DEFAULT_JOINT` is what first-time visitors see).
 
 Each joint is its own model: include only the bones and muscles relevant to it (muscles that
 cross it belong; neighbouring joints do not).
 
 A bone can carry several joints (`joints: [...]`, outermost first), and `frame: 'root'` poses a
 ball joint against the trunk while it rides a moving parent (the shoulder's humerus on the
-scapula). A joint's `coupled(pose)` adds motion driven by other joints (scapulohumeral rhythm).
+scapula). A joint's `coupled(pose)` adds motion driven by other joints (scapulohumeral rhythm),
+and a joint with no `axis` is a virtual control that drives others that way (the hand's finger
+sliders). Sliders can be grouped (`JointControl.group`) and are then shown one group at a time.
 
 ## Licensing
 

@@ -24,12 +24,19 @@ export interface DeformerOptions {
 	margin: number;
 	/** rings of neighbours the collision correction is spread over */
 	smoothIters: number;
+	/** projections after smoothing, to catch vertices the smoothing pulled back in */
+	finalPasses: number;
 	/** fraction of a muscle's length that is contractile belly (rest takes no length change) */
 	bellyFrac: number;
 	kMin: number;
 	kMax: number;
 	/** weights above this pin a vertex to that bone, so it never collides with it */
 	pinnedWeight: number;
+	/**
+	 * a vertex tests collision only against bones it is skinned to or lies within this distance
+	 * of at rest (mm). Infinity tests every bone; a finite radius pays off with many small bones.
+	 */
+	collideRadius: number;
 }
 
 export const DEFAULT_DEFORMER_OPTIONS: DeformerOptions = {
@@ -38,10 +45,12 @@ export const DEFAULT_DEFORMER_OPTIONS: DeformerOptions = {
 	collide: true,
 	margin: 0.8,
 	smoothIters: 3,
+	finalPasses: 2,
 	bellyFrac: 0.8,
 	kMin: 0.8,
 	kMax: 1.3,
-	pinnedWeight: 0.995
+	pinnedWeight: 0.995,
+	collideRadius: Infinity
 };
 
 interface BoneState {
@@ -51,6 +60,44 @@ interface BoneState {
 	Dq: Quat;
 	/** column-major rotation matrix */
 	M3: number[];
+}
+
+/** A vertex's skin weights rarely involve more than a few bones; keep the largest this many. */
+const MAX_INFLUENCES = 4;
+
+interface SparseWeights {
+	/** CSR row starts */
+	start: Uint32Array;
+	idx: Uint8Array;
+	val: Float32Array;
+}
+
+/**
+ * Nonzero weights of each row of a dense (rows x nb) weight table, in ascending bone order. Rows
+ * with more than MAX_INFLUENCES nonzero weights keep the largest and are renormalized.
+ */
+function sparse(W: ArrayLike<number>, rows: number, nb: number): SparseWeights {
+	const start = new Uint32Array(rows + 1), idx: number[] = [], val: number[] = [];
+	const order = Array.from({ length: nb }, (_, b) => b);
+	for (let i = 0; i < rows; i++) {
+		let keep = order.filter((b) => W[i * nb + b] > 0);
+		if (keep.length > MAX_INFLUENCES) {
+			keep = keep.sort((p, q) => W[i * nb + q] - W[i * nb + p]).slice(0, MAX_INFLUENCES).sort((p, q) => p - q);
+			const sum = keep.reduce((t, b) => t + W[i * nb + b], 0);
+			for (const b of keep) { idx.push(b); val.push(W[i * nb + b] / sum); }
+		} else for (const b of keep) { idx.push(b); val.push(W[i * nb + b]); }
+		start[i + 1] = idx.length;
+	}
+	return { start, idx: Uint8Array.from(idx), val: Float32Array.from(val) };
+}
+
+/** End-to-end distance of a centerline, or with `path` its length along the bins. */
+function centerlineLength(C: ArrayLike<number>, bins: number, path: boolean): number {
+	const e = (bins - 1) * 3;
+	if (!path) return Math.hypot(C[e] - C[0], C[e + 1] - C[1], C[e + 2] - C[2]);
+	let L = 0;
+	for (let k = 3; k <= e; k += 3) L += Math.hypot(C[k] - C[k - 3], C[k + 1] - C[k - 2], C[k + 2] - C[k - 1]);
+	return L;
 }
 
 class MuscleState {
@@ -69,10 +116,17 @@ class MuscleState {
 	readonly tmp: Float32Array;
 	readonly mark: Uint8Array;
 	readonly active: Uint32Array;
+	/** per vertex, its nonzero skin weights (at most MAX_INFLUENCES) */
+	readonly skinWeights: SparseWeights;
+	/** per centerline bin, its nonzero skin weights */
+	readonly centerWeights: SparseWeights;
+	/** per vertex (CSR), the bones it is tested against for collision */
+	readonly candStart: Uint32Array;
+	readonly cand: Uint8Array;
 	/** current bulge factor */
 	k = 1;
 
-	constructor(mesh: MuscleMesh, nb: number, fields: (SdfGrid | null)[]) {
+	constructor(mesh: MuscleMesh, nb: number, fields: (SdfGrid | null)[], opts: DeformerOptions) {
 		this.mesh = mesh;
 		this.nb = nb;
 		const { nv, rest, centerline: c, index } = mesh;
@@ -86,8 +140,7 @@ class MuscleState {
 			this.u[i] = Math.min(NB - 1, Math.max(0, t * NB - 0.5));
 		}
 		this.centerSkinned = new Float64Array(NB * 3);
-		const a = c.C[0], b = c.C[NB - 1];
-		this.restLength = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+		this.restLength = centerlineLength(c.C.flat(), NB, !!c.path);
 
 		// vertex adjacency, CSR
 		const deg = new Uint32Array(nv);
@@ -116,6 +169,21 @@ class MuscleState {
 				this.d0[i * nb + bi] = g ? sdfSample(g, rest[i * 3], rest[i * 3 + 1], rest[i * 3 + 2]) : SDF_FAR;
 			}
 
+		this.skinWeights = sparse(mesh.weights, nv, nb);
+		this.centerWeights = sparse(c.W.flat(), NB, nb);
+
+		const W = mesh.weights, candStart = new Uint32Array(nv + 1), cand: number[] = [];
+		for (let i = 0; i < nv; i++) {
+			for (let bi = 0; bi < nb; bi++) {
+				const w = W[i * nb + bi];
+				if (!fields[bi] || w > opts.pinnedWeight) continue;
+				if (w > 0 || this.d0[i * nb + bi] < opts.collideRadius) cand.push(bi);
+			}
+			candStart[i + 1] = cand.length;
+		}
+		this.candStart = candStart;
+		this.cand = Uint8Array.from(cand);
+
 		this.base = new Float32Array(nv * 3);
 		this.delta = new Float32Array(nv * 3);
 		this.tmp = new Float32Array(nv * 3);
@@ -133,7 +201,6 @@ export class Deformer {
 	private readonly bones: BoneState[];
 	private readonly states: MuscleState[];
 	private readonly byName: Map<string, MuscleState>;
-	private readonly ws: Float64Array;
 
 	constructor(assets: JointAssets, rig: Rig, opts: Partial<DeformerOptions> = {}) {
 		this.opts = { ...DEFAULT_DEFORMER_OPTIONS, ...opts };
@@ -142,9 +209,8 @@ export class Deformer {
 		this.nb = assets.boneCount;
 		if (rig.boneCount !== this.nb) throw new Error('Rig and assets disagree on bone count');
 		this.bones = Array.from({ length: this.nb }, () => ({ R: [0, 0, 0, 1], T: [0, 0, 0], Dq: [0, 0, 0, 0], M3: qToMat3([0, 0, 0, 1]) }));
-		this.states = assets.muscles.map((m) => new MuscleState(m, this.nb, assets.fields));
+		this.states = assets.muscles.map((m) => new MuscleState(m, this.nb, assets.fields, this.opts));
 		this.byName = new Map(this.states.map((s) => [s.mesh.name, s]));
-		this.ws = new Float64Array(this.nb);
 		this.setTransforms(rig.solve(rig.initialPose()));
 	}
 
@@ -204,14 +270,16 @@ export class Deformer {
 		});
 	}
 
-	/** Skin point (x,y,z) with weights ws[0..nb) into out[o..o+2]. */
-	private skin(x: number, y: number, z: number, ws: ArrayLike<number>, out: Float32Array | Float64Array, o: number): void {
-		const nb = this.nb, bones = this.bones;
+	/**
+	 * Skin point (x,y,z) into out[o..o+2]. Weights are sparse: bones idx[a..a+count) with weights
+	 * val[a..a+count), in ascending bone order.
+	 */
+	private skin(x: number, y: number, z: number, idx: ArrayLike<number>, val: ArrayLike<number>, a: number, count: number, out: Float32Array | Float64Array, o: number): void {
+		const bones = this.bones, end = a + count;
 		if (!this.opts.dqs) {
 			let X = 0, Y = 0, Z = 0;
-			for (let b = 0; b < nb; b++) {
-				const w = ws[b];
-				if (!w) continue;
+			for (let k = a; k < end; k++) {
+				const b = idx[k], w = val[k];
 				const p = qRotate(bones[b].R, [x, y, z]);
 				X += w * (p[0] + bones[b].T[0]);
 				Y += w * (p[1] + bones[b].T[1]);
@@ -220,13 +288,13 @@ export class Deformer {
 			out[o] = X; out[o + 1] = Y; out[o + 2] = Z;
 			return;
 		}
-		let piv = 0;
-		for (let b = 1; b < nb; b++) if (ws[b] > ws[piv]) piv = b;
-		const P = bones[piv].R;
+		let piv = a;
+		for (let k = a + 1; k < end; k++) if (val[k] > val[piv]) piv = k;
+		const P = bones[idx[piv]].R;
 		let rx = 0, ry = 0, rz = 0, rw = 0, dx = 0, dy = 0, dz = 0, dw = 0;
-		for (let b = 0; b < nb; b++) {
-			let w = ws[b];
-			if (!w) continue;
+		for (let k = a; k < end; k++) {
+			const b = idx[k];
+			let w = val[k];
 			const R = bones[b].R, D = bones[b].Dq;
 			if (R[0] * P[0] + R[1] * P[1] + R[2] * P[2] + R[3] * P[3] < 0) w = -w;
 			rx += w * R[0]; ry += w * R[1]; rz += w * R[2]; rw += w * R[3];
@@ -246,17 +314,15 @@ export class Deformer {
 	}
 
 	private skinCenterline(s: MuscleState): void {
-		const c = s.mesh.centerline;
-		for (let k = 0; k < s.bins; k++) this.skin(c.C[k][0], c.C[k][1], c.C[k][2], c.W[k], s.centerSkinned, k * 3);
+		const c = s.mesh.centerline, sw = s.centerWeights;
+		for (let k = 0; k < s.bins; k++) this.skin(c.C[k][0], c.C[k][1], c.C[k][2], sw.idx, sw.val, sw.start[k], sw.start[k + 1] - sw.start[k], s.centerSkinned, k * 3);
 	}
 
 	private bulgeFactor(s: MuscleState): number {
 		const c = s.mesh.centerline;
 		if (!this.opts.bulge || !c.bulge) return 1;
 		const ref = this.byName.get(c.lenref) ?? s;
-		const Q = ref.centerSkinned, e = (ref.bins - 1) * 3;
-		const L = Math.hypot(Q[e] - Q[0], Q[e + 1] - Q[1], Q[e + 2] - Q[2]);
-		const ratio = L / ref.restLength;
+		const ratio = centerlineLength(ref.centerSkinned, ref.bins, !!ref.mesh.centerline.path) / ref.restLength;
 		const belly = Math.max(0.3, 1 - (1 - ratio) / this.opts.bellyFrac);
 		return Math.min(this.opts.kMax, Math.max(this.opts.kMin, 1 / Math.sqrt(belly)));
 	}
@@ -270,11 +336,10 @@ export class Deformer {
 
 	/** Push vertex i (stored at P[o..o+2]) out of any bone it is deeper in than allowed. */
 	private project(s: MuscleState, i: number, P: Float32Array, o: number): boolean {
-		const nb = this.nb, W = s.mesh.weights;
+		const nb = this.nb, cand = s.cand;
 		let moved = false;
-		for (let b = 0; b < nb; b++) {
-			const g = this.assets.fields[b];
-			if (!g || W[i * nb + b] > this.opts.pinnedWeight) continue;
+		for (let c = s.candStart[i]; c < s.candStart[i + 1]; c++) {
+			const b = cand[c], g = this.assets.fields[b]!;
 			const B = this.bones[b], M = B.M3;
 			const x = P[o] - B.T[0], y = P[o + 1] - B.T[1], z = P[o + 2] - B.T[2];
 			const lx = M[0] * x + M[1] * y + M[2] * z, ly = M[3] * x + M[4] * y + M[5] * z, lz = M[6] * x + M[7] * y + M[8] * z;
@@ -293,14 +358,13 @@ export class Deformer {
 	}
 
 	private deformMuscle(s: MuscleState, out: Float32Array): void {
-		const { nv, rest: R, weights: W, centerline: c } = s.mesh;
-		const nb = this.nb, base = s.base, NB = s.bins, Cs = s.centerSkinned, ws = this.ws;
+		const { nv, rest: R, centerline: c } = s.mesh;
+		const base = s.base, NB = s.bins, Cs = s.centerSkinned, sw = s.skinWeights;
 		const k = (s.k = this.bulgeFactor(s));
 
 		for (let i = 0; i < nv; i++) {
 			const o = i * 3;
-			for (let b = 0; b < nb; b++) ws[b] = W[i * nb + b];
-			this.skin(R[o], R[o + 1], R[o + 2], ws, base, o);
+			this.skin(R[o], R[o + 1], R[o + 2], sw.idx, sw.val, sw.start[i], sw.start[i + 1] - sw.start[i], base, o);
 			if (k === 1) continue;
 			const uu = s.u[i], k0 = Math.min(NB - 2, uu | 0), f = uu - k0;
 			const prof = c.prof[k0] + (c.prof[k0 + 1] - c.prof[k0]) * f;
@@ -356,7 +420,7 @@ export class Deformer {
 				this.project(s, i, out, o);
 			}
 		}
-		for (let pass = 0; pass < 2; pass++) for (let a = 0; a < na; a++) this.project(s, act[a], out, act[a] * 3);
+		for (let pass = 0; pass < this.opts.finalPasses; pass++) for (let a = 0; a < na; a++) this.project(s, act[a], out, act[a] * 3);
 		for (let a = 0; a < na; a++) mark[act[a]] = 0;
 	}
 }

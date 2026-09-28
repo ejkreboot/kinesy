@@ -1,5 +1,6 @@
 import type { JointAssetUrls } from '../core/load';
 import type { Vec3 } from '../core/math';
+import type { DeformerOptions } from '../core/deformer';
 import type { Pose, RigDef } from '../core/rig';
 
 /** Everything the app needs to present one joint. Add a joint by implementing this. */
@@ -10,6 +11,8 @@ export interface JointModule {
 	subtitle: string;
 	assets: JointAssetUrls;
 	rig: RigDef;
+	/** deformer settings for this joint (see DEFAULT_DEFORMER_OPTIONS) */
+	deformer?: Partial<DeformerOptions>;
 	/** one slider per joint degree of freedom, in display order */
 	controls: JointControl[];
 	/** muscles in list order; list groups follow first appearance of each `group` */
@@ -43,6 +46,8 @@ export interface JointControl {
 	format: (deg: number) => string;
 	/** labels under the slider: min, middle, max */
 	ticks: [string, string, string];
+	/** sliders with a group are shown one group at a time, picked with a switch above them */
+	group?: string;
 }
 
 export interface MuscleInfo {

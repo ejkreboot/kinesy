@@ -8,8 +8,11 @@ import type { AxisDef } from './types';
  */
 export interface RigJointDef {
 	id: string;
-	/** key into the asset manifest's `axes` */
-	axis: string;
+	/**
+	 * key into the asset manifest's `axes`. Left out for a virtual joint: a control that moves no
+	 * bone itself but drives others through their `coupled` (one slider bending four fingers).
+	 */
+	axis?: string;
 	/** clinical angle of the rest (mesh) pose */
 	restAngle: number;
 	min: number;
@@ -48,13 +51,14 @@ export type Pose = Record<string, number>;
 export interface RigFrames {
 	/** world transform of each bone */
 	bones: Rigid[];
-	/** per joint (def order), the world transform its axis is expressed in, before it rotates */
+	/** per joint (def order), the world transform its axis is expressed in, before it rotates (unset for virtual joints) */
 	joints: Rigid[];
 }
 
 export class Rig {
 	readonly def: RigDef;
-	private readonly axes: { point: Vec3; dir: Vec3 }[];
+	/** null for virtual joints */
+	private readonly axes: ({ point: Vec3; dir: Vec3 } | null)[];
 	private readonly jointIndex: Map<string, number>;
 
 	constructor(def: RigDef, axes: Record<string, AxisDef>, boneNames: string[]) {
@@ -67,12 +71,14 @@ export class Rig {
 			if (b.parent >= i) throw new Error(`Bone ${b.name}: parent must precede child`);
 			for (const id of b.joints ?? []) {
 				if (!this.jointIndex.has(id)) throw new Error(`Bone ${b.name}: unknown joint ${id}`);
+				if (!def.joints[this.jointIndex.get(id)!].axis) throw new Error(`Bone ${b.name}: joint ${id} is virtual (no axis)`);
 				if (owner.has(id)) throw new Error(`Joint ${id} moves both ${owner.get(id)} and ${b.name}`);
 				owner.set(id, b.name);
 			}
 			if (b.frame === 'root' && !b.joints?.length) throw new Error(`Bone ${b.name}: a root frame needs a joint`);
 		});
 		this.axes = def.joints.map((j) => {
+			if (!j.axis) return null;
 			const a = axes[j.axis];
 			if (!a) throw new Error(`Joint ${j.id}: axis "${j.axis}" missing from assets`);
 			return { point: a.point, dir: normalize3(a.dir) };
@@ -90,7 +96,9 @@ export class Rig {
 	}
 
 	axis(id: string): { point: Vec3; dir: Vec3 } {
-		return this.axes[this.jointIndex.get(id)!];
+		const a = this.axes[this.jointIndex.get(id)!];
+		if (!a) throw new Error(`Joint ${id} is virtual and has no axis`);
+		return a;
 	}
 
 	initialPose(): Pose {
@@ -122,12 +130,12 @@ export class Rig {
 			let w = parent;
 			if (b.frame === 'root' && b.parent >= 0) {
 				// root orientation, translated so the first joint's center moves with the parent
-				const root = bones[0], c = this.axes[this.jointIndex.get(b.joints![0])!].point;
+				const root = bones[0], c = this.axes[this.jointIndex.get(b.joints![0])!]!.point;
 				const pc = rigidApply(parent, c), rc = rigidApply(root, c);
 				w = { q: root.q, t: [root.t[0] + pc[0] - rc[0], root.t[1] + pc[1] - rc[1], root.t[2] + pc[2] - rc[2]] };
 			}
 			for (const id of b.joints ?? []) {
-				const ji = this.jointIndex.get(id)!, j = this.def.joints[ji], ax = this.axes[ji];
+				const ji = this.jointIndex.get(id)!, j = this.def.joints[ji], ax = this.axes[ji]!;
 				joints[ji] = w;
 				w = rigidCompose(w, rigidAboutAxis(ax.point, ax.dir, (this.angle(id, pose) - j.restAngle) * DEG));
 			}

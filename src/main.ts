@@ -2,11 +2,15 @@ import './styles.css';
 import { mountJoint, type MountedJoint } from './app';
 import type { JointModule } from './joints/types';
 
-// Each joint is shown on its own; its module (and assets) load only when picked.
+// Each joint is shown on its own; its module (and assets) load only when picked. Listed in
+// anatomical order, proximal to distal.
 const JOINTS: { id: string; label: string; load: () => Promise<JointModule> }[] = [
+	{ id: 'shoulder', label: 'Shoulder', load: () => import('./joints/shoulder').then((m) => m.shoulder) },
 	{ id: 'elbow', label: 'Elbow', load: () => import('./joints/elbow').then((m) => m.elbow) },
-	{ id: 'shoulder', label: 'Shoulder', load: () => import('./joints/shoulder').then((m) => m.shoulder) }
+	{ id: 'hand', label: 'Wrist & hand', load: () => import('./joints/hand').then((m) => m.hand) }
 ];
+/** shown to first-time visitors */
+const DEFAULT_JOINT = 'elbow';
 const STORE_KEY = 'kinesy.joint';
 
 // The page shell is rebuilt from this copy on every switch, which drops the old joint's listeners.
@@ -22,7 +26,7 @@ function initialJoint(): string {
 	} catch {
 		// storage unavailable (private mode, sandboxed frame)
 	}
-	return JOINTS[0].id;
+	return DEFAULT_JOINT;
 }
 
 function remember(id: string): void {

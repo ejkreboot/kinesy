@@ -25,6 +25,15 @@ class Source:
         return self._cache[fma]
 
 
+def drop_fragments(m: trimesh.Trimesh, frac: float) -> trimesh.Trimesh:
+    """Remove disconnected shells smaller than `frac` of the largest one."""
+    comps = m.split(only_watertight=False)
+    if len(comps) < 2:
+        return m
+    big = max(len(c.faces) for c in comps)
+    return trimesh.util.concatenate([c for c in comps if len(c.faces) >= frac * big])
+
+
 def decimate(m: trimesh.Trimesh, target_faces: int | None) -> trimesh.Trimesh:
     if target_faces is None or len(m.faces) <= target_faces:
         return m

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Deformer } from '../core/deformer';
+import { Deformer, type DeformerOptions } from '../core/deformer';
 import { rigidToMat4 } from '../core/math';
 import type { Pose, Rig } from '../core/rig';
 import type { JointAssets } from '../core/types';
@@ -38,8 +38,8 @@ export class JointModel {
 	private dirty = true;
 	private readonly raycaster = new THREE.Raycaster();
 
-	constructor(private readonly stage: Stage, assets: JointAssets, private readonly rig: Rig, muscles: MuscleInfo[]) {
-		this.deformer = new Deformer(assets, rig);
+	constructor(private readonly stage: Stage, assets: JointAssets, private readonly rig: Rig, muscles: MuscleInfo[], opts: Partial<DeformerOptions> = {}) {
+		this.deformer = new Deformer(assets, rig, opts);
 		this.pose = rig.initialPose();
 		for (const m of muscles) {
 			this.info.set(m.key, m);

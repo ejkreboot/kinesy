@@ -10,12 +10,13 @@ BINS = 20
 
 def sdf_grid(V, F, opts=None):
     """Signed distance (negative inside) on a regular grid around the mesh, int8-quantized.
-    opts: `h` voxel size (mm), and `xmin`..`zmax` to clip the grid (viewer frame, mm).
-    Returns (int8 array ordered x-fastest, entry dict without offset)."""
+    opts: `h` voxel size (mm), `pad` margin around the mesh (mm), and `xmin`..`zmax` to clip
+    the grid (viewer frame, mm). Returns (int8 array ordered x-fastest, entry dict without offset)."""
     opts = opts or {}
     h = opts.get('h', VOXEL_MM)
     V = np.asarray(V, dtype=np.float64)
-    lo, hi = V.min(0) - PAD_MM, V.max(0) + PAD_MM
+    pad = opts.get('pad', PAD_MM)
+    lo, hi = V.min(0) - pad, V.max(0) + pad
     for a, c in enumerate('xyz'):
         if f'{c}min' in opts:
             lo[a] = max(lo[a], opts[f'{c}min'])
@@ -30,7 +31,7 @@ def sdf_grid(V, F, opts=None):
     return data, {'lo': lo.tolist(), 'h': h, 'q': QUANT_MM, 'dims': dims.tolist()}
 
 
-def centerline(V, W, bulge, lenref):
+def centerline(V, W, bulge, lenref, path=False):
     """Bin a muscle along its principal axis: bin centers, mean skin weights, and a
     normalized cross-section profile (1 = widest)."""
     mu = V.mean(0)
@@ -60,4 +61,4 @@ def centerline(V, W, bulge, lenref):
     WC /= WC.sum(1, keepdims=True)
     return {'mu': mu.tolist(), 'a': a.tolist(), 'lo': float(lo), 'hi': float(hi),
             'C': C.round(3).tolist(), 'W': WC.round(4).tolist(), 'prof': ((R / R.max()) ** 2).round(3).tolist(),
-            'bulge': bool(bulge), 'lenref': lenref}
+            'bulge': bool(bulge), 'lenref': lenref, **({'path': True} if path else {})}

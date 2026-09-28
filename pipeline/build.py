@@ -21,8 +21,8 @@ sys.path.insert(0, str(ROOT.parent))
 
 from pipeline.lib.axes import FITTERS  # noqa: E402
 from pipeline.lib.fields import centerline, sdf_grid  # noqa: E402
-from pipeline.lib.meshes import Frame, Source, decimate, sample  # noqa: E402
-from pipeline.lib.skin import couple, proximity_weights  # noqa: E402
+from pipeline.lib.meshes import Frame, Source, decimate, drop_fragments, sample  # noqa: E402
+from pipeline.lib.skin import chain_weights, couple, proximity_weights  # noqa: E402
 
 STL_DIR = ROOT / 'sources' / 'bodyparts3d' / 'stl'
 
@@ -31,6 +31,10 @@ def fit_axes(cfg, src, axes_path, refit):
     if not refit and axes_path.exists():
         return json.loads(axes_path.read_text())
     out = {'_frame': 'BodyParts3D source frame (mm). Fitted by pipeline/lib/axes.py; regenerate with --refit-axes.'}
+    if hasattr(cfg, 'fit_axes'):  # joints whose axes share one frame fit them all at once
+        for name, ax in cfg.fit_axes(src).items():
+            print(f'  axis {name:18s} point {np.round(ax["point"], 1)} dir {np.round(ax["dir"], 3)} rest {ax.get("rest", 0):6.1f}')
+            out[name] = ax
     for name, spec in cfg.AXES.items():
         point, d, err = FITTERS[spec['fit']](src, spec)
         print(f'  axis {name:10s} point {np.round(point, 2)} dir {np.round(d, 3)} residual {err:.3f}')
@@ -84,10 +88,21 @@ def build(joint: str, refit: bool):
 
     print('muscles')
     muscles, allowed = {}, {}
+    # digits: weight by position along each bone chain rather than by proximity (see chain_weights)
+    chains = None
+    if hasattr(cfg, 'skin_chains'):
+        chains = [[(bone_id[b], plane) for b, plane in c] for c in cfg.skin_chains(src, axes_src)]
+    faces_by_name = getattr(cfg, 'MUSCLE_FACES_BY_NAME', {})
+    min_frac = getattr(cfg, 'MIN_COMPONENT_FRAC', None)
     for name, fma, attach in cfg.MUSCLES:
-        m = decimate(src.load(fma), cfg.MUSCLE_FACES)
+        m = src.load(fma)
+        if min_frac:
+            m = drop_fragments(m, min_frac)
+        m = decimate(m, faces_by_name.get(name, cfg.MUSCLE_FACES))
         allowed[name] = [bone_id[b] for b in attach]
-        muscles[name] = (m, proximity_weights(m.vertices, m.faces, trees, allowed[name], nb))
+        W = (chain_weights(m.vertices, allowed[name], nb, chains, trees) if chains and name in cfg.CHAIN_SKINNED
+             else proximity_weights(m.vertices, m.faces, trees, allowed[name], nb))
+        muscles[name] = (m, W)
     muscles = couple(muscles, allowed)
     for name, (m, W) in muscles.items():
         print(f'  {name:16s} faces {len(m.faces):5d}  mean weights {np.round(W.mean(0), 2)}')
@@ -124,7 +139,8 @@ def build(joint: str, refit: bool):
         fields[bone] = ent
         print(f'  {bone:8s} dims {ent["dims"]}')
 
-    centers = {n: centerline(Vv[n], W, n in cfg.BULGE, cfg.LENGTH_REF.get(n, n)) for n, (_, W) in muscles.items()}
+    path = getattr(cfg, 'BULGE_ALONG_PATH', False)
+    centers = {n: centerline(Vv[n], W, n in cfg.BULGE, cfg.LENGTH_REF.get(n, n), path) for n, (_, W) in muscles.items()}
 
     manifest = {
         'format': 'kinesy-joint', 'version': 1, 'joint': cfg.NAME, 'units': 'mm', 'source': cfg.SOURCE,

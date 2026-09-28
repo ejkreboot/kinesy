@@ -62,6 +62,11 @@ export interface CenterlineEntry {
 	bulge: boolean;
 	/** muscle whose origin-insertion length drives this one's bulge (a head that shares a tendon) */
 	lenref: string;
+	/**
+	 * measure length along the centerline rather than end to end, for muscles whose tendons wrap
+	 * a joint (a finger extensor gets longer, not shorter, as the fingers curl)
+	 */
+	path?: boolean;
 }
 
 export interface AssetManifest {

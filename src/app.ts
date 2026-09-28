@@ -46,7 +46,7 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 	}
 	debug.msg('assets decoded');
 	const rig = new Rig(joint.rig, assets.manifest.axes, assets.manifest.bones);
-	const model = new JointModel(stage, assets, rig, joint.muscles);
+	const model = new JointModel(stage, assets, rig, joint.muscles, joint.deformer);
 	model.onPosed = (ms) => debug.posed(ms);
 	for (const a of joint.axisOverlays) model.addAxis(a.joint, a.color, a.length, a.offset);
 	stage.setView(joint.view);
@@ -177,6 +177,8 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 
 	panels.explore!.activate();
 	debug.msg('ready');
+	// #debug: expose the live model for inspection from the console
+	if (location.hash === '#debug') Object.assign(window, { __kinesy: { joint, rig, model, stage } });
 	return {
 		dispose: () => {
 			animator.cancel();
