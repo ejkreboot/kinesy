@@ -1,0 +1,429 @@
+/**
+ * Centerline deformation on the GPU: the one place the deformation shader lives. Every material
+ * that draws a path-driven muscle (the visible one, shadow depth/distance, ID picking) is patched
+ * with the same chunk, so all of them see the same deformed surface.
+ *
+ * Per frame the CPU solves the strands (core/muscle/path.ts) and uploads them, with the bones, as
+ * one small float texture; positions never go back up. The bone distance fields sit in one 3D
+ * texture. The GLSL below mirrors core/muscle/deform.ts step for step (its constants come from
+ * there); keep them in sync.
+ *
+ * Texture layout (RGBA32F, see PathSolver.writeTexture): row s < strands holds sample i's
+ * position + bulge at texel 2i and its frame quaternion at 2i+1, and (origin bone, insertion bone)
+ * at 2N; the last row holds bone b's translation at 2b and rotation at 2b+1.
+ */
+import * as THREE from 'three';
+import type { BoundMesh } from '../core/muscle/bind';
+import { BISECT_STEPS, EXIT_DEPTH, EXIT_NEAR, PROXY_BELLY, TRACE_STEPS, WALK_MAX } from '../core/muscle/deform';
+import type { MuscleSystem } from '../core/muscle/system';
+import type { JointAssets } from '../core/types';
+
+/** Proxy capsules the shader can take (two vec4 uniforms each). */
+export const MAX_CAPSULES = 64;
+
+const PARS = /* glsl */ `
+uniform highp sampler2D kData;
+uniform highp sampler3D kSdf;
+uniform vec4 kGridLo[K_BONES];   // lo.xyz, voxel size (mm)
+uniform vec4 kGridDim[K_BONES];  // nx, ny, nz (0 = no field), z offset in the atlas
+uniform float kGridQ[K_BONES];   // mm per unit of the normalized texel
+uniform vec3 kAtlas;
+uniform vec4 kColliders;         // bone per slot, -1 unused
+uniform vec4 kCaps[2 * K_MAX_CAPS];
+uniform int kCapCount;            // capsules of lower layers (a prefix of kCaps)
+uniform vec3 kCollide;           // margin, soft, passes
+uniform float kEnabled;
+attribute vec4 kPath;            // s, blend, strand A, strand B
+attribute vec3 kOffset;
+attribute vec3 kNormal;
+attribute vec4 kWeights;         // belly, origin anchor, insertion anchor, rest proxy clearance
+attribute vec4 kClear;           // rest clearance per collider slot
+attribute vec4 kExit0;           // exit directions (vertex frame): slot 0 .xyz, slot 3 .x
+attribute vec4 kExit1;           // slot 1 .xyz, slot 3 .y
+attribute vec4 kExit2;           // slot 2 .xyz, slot 3 .z
+
+vec3 kPos;
+vec3 kNrm;
+
+vec3 kRot(vec4 q, vec3 v) {
+	vec3 t = 2.0 * cross(q.xyz, v);
+	return v + q.w * t + cross(q.xyz, t);
+}
+
+vec4 kTexel(int x, int y) {
+	return texelFetch(kData, ivec2(x, y), 0);
+}
+
+void kStrand(int row, float s, out vec3 c, out vec4 q, out float k) {
+	highp float f = clamp(s, 0.0, 1.0) * float(K_SAMPLES - 1);
+	int i = min(int(f), K_SAMPLES - 2);
+	highp float u = f - float(i);
+	vec4 p0 = kTexel(2 * i, row), p1 = kTexel(2 * i + 2, row);
+	vec4 q0 = kTexel(2 * i + 1, row), q1 = kTexel(2 * i + 3, row);
+	c = mix(p0.xyz, p1.xyz, u);
+	k = p0.w;
+	if (dot(q0, q1) < 0.0) q1 = -q1;
+	q = normalize(mix(q0, q1, u));
+}
+
+void kBone(int b, out vec3 t, out vec4 q) {
+	t = kTexel(2 * b, K_BONE_ROW).xyz;
+	q = kTexel(2 * b + 1, K_BONE_ROW);
+}
+
+vec3 kToBone(vec3 p, vec3 t, vec4 q) {
+	return kRot(vec4(-q.xyz, q.w), p - t);
+}
+
+// signed distance (mm) to bone b at bone-local point l; 99 outside its grid
+float kSdfAt(int b, vec3 l) {
+	vec4 lo = kGridLo[b], dim = kGridDim[b];
+	vec3 v = (l - lo.xyz) / lo.w;
+	if (dim.x < 1.0 || any(lessThan(v, vec3(0.0))) || any(greaterThan(v, dim.xyz - 1.0))) return 99.0;
+	return texture(kSdf, vec3(v.x + 0.5, v.y + 0.5, v.z + dim.w + 0.5) / kAtlas).r * kGridQ[b];
+}
+
+vec3 kSdfGrad(int b, vec3 l) {
+	float h = kGridLo[b].w * 0.75;
+	vec3 g = vec3(
+		kSdfAt(b, l + vec3(h, 0.0, 0.0)) - kSdfAt(b, l - vec3(h, 0.0, 0.0)),
+		kSdfAt(b, l + vec3(0.0, h, 0.0)) - kSdfAt(b, l - vec3(0.0, h, 0.0)),
+		kSdfAt(b, l + vec3(0.0, 0.0, h)) - kSdfAt(b, l - vec3(0.0, 0.0, h)));
+	float n = length(g);
+	return n > 1e-6 && n < 50.0 ? g / n : vec3(0.0);
+}
+
+float kCapsule(int i, vec3 p, out vec3 g) {
+	vec4 A = kCaps[2 * i], B = kCaps[2 * i + 1];
+	vec3 e = B.xyz - A.xyz;
+	float ee = dot(e, e);
+	float h = ee > 1e-12 ? clamp(dot(p - A.xyz, e) / ee, 0.0, 1.0) : 0.0;
+	vec3 d = p - (A.xyz + e * h);
+	float l = length(d);
+	g = l > 1e-9 ? d / l : vec3(0.0);
+	return l - mix(A.w, B.w, h);
+}
+
+// smooth ramp: 0 up to 0, x²/(4w) up to 2w, then x − w
+float kRamp(float x, float w) {
+	return x <= 0.0 ? 0.0 : (x < 2.0 * w ? x * x / (4.0 * w) : x - w);
+}
+
+// distance to walk from p along unit dir (at most K_WALK_MAX) until bone b's distance rises to level
+float kWalkBone(int b, vec3 p, vec3 dir, float level) {
+	float lo = 0.0, t = 0.0;
+	for (int k = 0; k < K_TRACE; k++) {
+		float d = kSdfAt(b, p + dir * t) - level;
+		if (d >= 0.0) {
+			float hi = t;
+			for (int j = 0; j < K_BISECT; j++) {
+				if (hi <= lo) break;
+				float mid = 0.5 * (lo + hi);
+				if (kSdfAt(b, p + dir * mid) - level >= 0.0) hi = mid;
+				else lo = mid;
+			}
+			return hi;
+		}
+		lo = t;
+		if (t >= K_WALK_MAX) return K_WALK_MAX;
+		t = min(K_WALK_MAX, t + max(-d, 0.5));
+	}
+	return t;
+}
+
+// keep bone-local point p out of bone b: back to its surface (or rest depth), along the exit
+// direction e where the nearest way out would snap through, then out to target along the gradient
+vec3 kAvoidBone(int b, vec3 p, vec3 e, float rest, float target) {
+	float d = kSdfAt(b, p);
+	if (d >= target - 1e-3) return p;
+	float level = min(target, 0.0);
+	if (d < level) {
+		vec3 g = kSdfGrad(b, p);
+		vec3 pg = p + g * (level - d);
+		float w = dot(e, e) > 0.0
+			? smoothstep(K_EXIT_D0, K_EXIT_D1, level - d) * (1.0 - smoothstep(-0.2, 0.2, dot(g, e))) * (1.0 - smoothstep(K_EXIT_N0, K_EXIT_N1, rest))
+			: 0.0;
+		p = w > 0.0 ? mix(pg, p + e * kWalkBone(b, p, e, level), w) : pg;
+		d = kSdfAt(b, p);
+	}
+	float push = kRamp(target - d, kCollide.y);
+	if (push > 0.0) p += kSdfGrad(b, p) * push;
+	return p;
+}
+
+vec3 kAvoidCap(int i, vec3 p, float target) {
+	vec3 g;
+	float d = kCapsule(i, p, g);
+	if (d >= target - 1e-3) return p;
+	float level = min(target, 0.0);
+	if (d < level) {
+		p += g * (level - d);
+		d = kCapsule(i, p, g);
+	}
+	float push = kRamp(target - d, kCollide.y);
+	if (push > 0.0) p += g * push;
+	return p;
+}
+
+void kDeform() {
+	kPos = position;
+	kNrm = normal;
+	if (kEnabled < 0.5) return;
+	int ra = int(kPath.z + 0.5), rb = int(kPath.w + 0.5);
+	vec3 c;
+	vec4 q;
+	float k;
+	kStrand(ra, kPath.x, c, q, k);
+	if (rb != ra && kPath.y > 0.0) {
+		vec3 c2;
+		vec4 q2;
+		float k2;
+		kStrand(rb, kPath.x, c2, q2, k2);
+		c = mix(c, c2, kPath.y);
+		if (dot(q, q2) < 0.0) q2 = -q2;
+		q = normalize(mix(q, q2, kPath.y));
+		k = mix(k, k2, kPath.y);
+	}
+	float gk = 1.0 + (k - 1.0) * kWeights.x;
+	vec3 p = c + kRot(q, vec3(kOffset.x, kOffset.yz * gk));
+	vec3 n = kRot(q, normalize(vec3(kNormal.x * gk, kNormal.yz)));
+
+	// ride the attachment bones rigidly near the ends
+	vec4 meta = kTexel(2 * K_SAMPLES, ra);
+	vec3 bt;
+	vec4 bq;
+	if (kWeights.y > 0.0) {
+		kBone(int(meta.x + 0.5), bt, bq);
+		p = mix(p, kRot(bq, position) + bt, kWeights.y);
+		n = normalize(mix(n, kRot(bq, normal), kWeights.y));
+	}
+	if (kWeights.z > 0.0) {
+		kBone(int(meta.y + 0.5), bt, bq);
+		p = mix(p, kRot(bq, position) + bt, kWeights.z);
+		n = normalize(mix(n, kRot(bq, normal), kWeights.z));
+	}
+
+	// keep out of bones (leaving on the side of first contact) and the proxies of lower layers
+	vec3 ex[4];
+	ex[0] = kExit0.xyz;
+	ex[1] = kExit1.xyz;
+	ex[2] = kExit2.xyz;
+	ex[3] = vec3(kExit0.w, kExit1.w, kExit2.w);
+	float tb = smoothstep(K_PROXY_B0, K_PROXY_B1, kWeights.x) * (1.0 - max(kWeights.y, kWeights.z));
+	int passes = int(kCollide.z + 0.5);
+	for (int pass = 0; pass < 4; pass++) {
+		if (pass >= passes) break;
+		for (int slot = 0; slot < 4; slot++) {
+			int b = int(floor(kColliders[slot] + 0.5));
+			if (b < 0) continue;
+			kBone(b, bt, bq);
+			vec3 l = kToBone(p, bt, bq);
+			if (kSdfAt(b, l) >= 98.0) continue;
+			vec3 e = dot(ex[slot], ex[slot]) > 0.0 ? kRot(vec4(-bq.xyz, bq.w), kRot(q, ex[slot])) : vec3(0.0);
+			l = kAvoidBone(b, l, e, kClear[slot], min(kClear[slot], kCollide.x));
+			p = kRot(bq, l) + bt;
+		}
+		// tendons slide over the muscles beneath, attachments hold: proxies push the belly only
+		if (kCapCount == 0 || tb <= 0.0) continue;
+		vec3 p0 = p;
+		for (int i = 0; i < K_MAX_CAPS; i++) {
+			if (i >= kCapCount) break;
+			p = kAvoidCap(i, p, min(kWeights.w, kCollide.x));
+		}
+		p = mix(p0, p, tb);
+	}
+	kPos = p;
+	kNrm = n;
+}
+`;
+
+/** Patch a built-in material's vertex shader to draw a path-driven muscle. */
+function patchVertex(shader: { vertexShader: string }, defines: string): void {
+	const v = shader.vertexShader;
+	for (const anchor of ['#include <common>', 'void main() {', '#include <begin_vertex>'])
+		if (!v.includes(anchor)) throw new Error(`Muscle shader: anchor ${anchor} not found`);
+	shader.vertexShader = v
+		.replace('#include <common>', `#include <common>\n${defines}\n${PARS}`)
+		.replace('void main() {', 'void main() {\n\tkDeform();')
+		.replace('#include <beginnormal_vertex>', 'vec3 objectNormal = kNrm;\n#ifdef USE_TANGENT\n\tvec3 objectTangent = vec3( tangent.xyz );\n#endif')
+		.replace('#include <begin_vertex>', 'vec3 transformed = kPos;\n#ifdef USE_ALPHAHASH\n\tvPosition = vec3( position );\n#endif');
+}
+
+/** A picking colour for id (1..2²⁴−1); 0 is "nothing". */
+function pickColor(id: number): THREE.Vector3 {
+	return new THREE.Vector3((id & 255) / 255, ((id >> 8) & 255) / 255, ((id >> 16) & 255) / 255);
+}
+
+/** Patch a MeshBasicMaterial's fragment shader to output a flat picking colour. */
+function patchPickFragment(shader: THREE.WebGLProgramParametersWithUniforms, id: number): void {
+	shader.uniforms.kPickColor = { value: pickColor(id) };
+	shader.fragmentShader = shader.fragmentShader
+		.replace('#include <common>', '#include <common>\nuniform vec3 kPickColor;')
+		.replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( kPickColor, 1.0 );')
+		.replace('#include <tonemapping_fragment>', '')
+		.replace('#include <colorspace_fragment>', '');
+}
+
+type Uniform<T> = { value: T };
+
+export class MuscleGpu {
+	readonly data: THREE.DataTexture;
+	readonly sdf: THREE.Data3DTexture;
+	/** shared by every patched material (the same objects, so one update reaches all) */
+	readonly shared: Record<string, Uniform<unknown>>;
+	private readonly buf: Float32Array;
+	private readonly width: number;
+	private readonly defines: string;
+	private readonly key: string;
+	private readonly caps: THREE.Vector4[];
+
+	constructor(private readonly system: MuscleSystem, assets: JointAssets) {
+		const solver = system.solver;
+		const [w, h] = solver.textureSize();
+		this.width = w;
+		this.buf = new Float32Array(w * h * 4);
+		this.data = new THREE.DataTexture(this.buf, w, h, THREE.RGBAFormat, THREE.FloatType);
+		this.data.minFilter = this.data.magFilter = THREE.NearestFilter;
+		this.data.generateMipmaps = false;
+
+		// bone distance fields stacked along z in one signed-normalized 3D texture
+		const nb = assets.boneCount, grids = assets.fields;
+		const ax = Math.max(1, ...grids.map((g) => g?.nx ?? 0)), ay = Math.max(1, ...grids.map((g) => g?.ny ?? 0));
+		const az = Math.max(1, grids.reduce((s, g) => s + (g?.nz ?? 0), 0));
+		const atlas = new Int8Array(ax * ay * az).fill(127);
+		const lo: THREE.Vector4[] = [], dim: THREE.Vector4[] = [], q: number[] = [];
+		let z0 = 0;
+		for (let b = 0; b < nb; b++) {
+			const g = grids[b];
+			if (!g) {
+				lo.push(new THREE.Vector4(0, 0, 0, 1));
+				dim.push(new THREE.Vector4(0, 0, 0, 0));
+				q.push(0);
+				continue;
+			}
+			for (let z = 0; z < g.nz; z++)
+				for (let y = 0; y < g.ny; y++)
+					atlas.set(g.data.subarray((z * g.ny + y) * g.nx, (z * g.ny + y + 1) * g.nx), ((z0 + z) * ay + y) * ax);
+			lo.push(new THREE.Vector4(g.lo[0], g.lo[1], g.lo[2], g.h));
+			dim.push(new THREE.Vector4(g.nx, g.ny, g.nz, z0));
+			q.push(127 * g.q);
+			z0 += g.nz;
+		}
+		this.sdf = new THREE.Data3DTexture(atlas, ax, ay, az);
+		this.sdf.format = THREE.RedFormat;
+		this.sdf.type = THREE.ByteType;
+		this.sdf.internalFormat = 'R8_SNORM';
+		this.sdf.minFilter = this.sdf.magFilter = THREE.LinearFilter;
+		this.sdf.unpackAlignment = 1;
+		this.sdf.generateMipmaps = false;
+		this.sdf.needsUpdate = true;
+
+		this.caps = Array.from({ length: 2 * MAX_CAPSULES }, () => new THREE.Vector4());
+		const c = system.collide;
+		this.shared = {
+			kData: { value: this.data },
+			kSdf: { value: this.sdf },
+			kGridLo: { value: lo },
+			kGridDim: { value: dim },
+			kGridQ: { value: q },
+			kAtlas: { value: new THREE.Vector3(ax, ay, az) },
+			kCaps: { value: this.caps },
+			kCollide: { value: new THREE.Vector3(c.margin, c.soft, c.passes) },
+			kEnabled: { value: 1 }
+		};
+		this.defines = [
+			`#define K_SAMPLES ${solver.N}`,
+			`#define K_BONE_ROW ${solver.strands.length}`,
+			`#define K_BONES ${nb}`,
+			`#define K_MAX_CAPS ${MAX_CAPSULES}`,
+			`#define K_TRACE ${TRACE_STEPS}`,
+			`#define K_BISECT ${BISECT_STEPS}`,
+			`#define K_WALK_MAX ${WALK_MAX.toFixed(1)}`,
+			`#define K_EXIT_D0 ${EXIT_DEPTH[0].toFixed(3)}`,
+			`#define K_EXIT_D1 ${EXIT_DEPTH[1].toFixed(3)}`,
+			`#define K_EXIT_N0 ${EXIT_NEAR[0].toFixed(3)}`,
+			`#define K_EXIT_N1 ${EXIT_NEAR[1].toFixed(3)}`,
+			`#define K_PROXY_B0 ${PROXY_BELLY[0].toFixed(3)}`,
+			`#define K_PROXY_B1 ${PROXY_BELLY[1].toFixed(3)}`
+		].join('\n');
+		this.key = `kinesy-muscle-${solver.N}-${solver.strands.length}-${nb}`;
+		if (system.capsules.length / 8 > MAX_CAPSULES) console.warn(`MuscleGpu: ${system.capsules.length / 8} proxy capsules, shader takes ${MAX_CAPSULES}`);
+		this.update();
+	}
+
+	/** Whether the deformation runs (off: rest pose, for timing comparisons). */
+	get enabled(): boolean {
+		return this.shared.kEnabled.value === 1;
+	}
+
+	set enabled(on: boolean) {
+		this.shared.kEnabled.value = on ? 1 : 0;
+	}
+
+	/** Upload the system's last solved state (call after system.update). */
+	update(): void {
+		this.system.solver.writeTexture(this.buf, this.width);
+		this.data.needsUpdate = true;
+		const C = this.system.capsules, n = Math.min(MAX_CAPSULES, C.length / 8);
+		for (let i = 0; i < n; i++) {
+			this.caps[2 * i].set(C[i * 8], C[i * 8 + 1], C[i * 8 + 2], C[i * 8 + 3]);
+			this.caps[2 * i + 1].set(C[i * 8 + 4], C[i * 8 + 5], C[i * 8 + 6], C[i * 8 + 7]);
+		}
+	}
+
+	/** Add the binding attributes to a muscle's (rest-pose) geometry. */
+	bindGeometry(g: THREE.BufferGeometry, b: BoundMesh): void {
+		g.setAttribute('kPath', new THREE.BufferAttribute(b.path, 4));
+		g.setAttribute('kOffset', new THREE.BufferAttribute(b.offset, 3));
+		g.setAttribute('kNormal', new THREE.BufferAttribute(b.normal, 3));
+		g.setAttribute('kWeights', new THREE.BufferAttribute(b.weights, 4));
+		g.setAttribute('kClear', new THREE.BufferAttribute(b.clear, 4));
+		// exit directions, 4 slots × 3, into three vec4s: slots 0–2 in .xyz, slot 3 spread over .w
+		const ex = [0, 1, 2].map(() => new Float32Array(b.nv * 4));
+		for (let v = 0; v < b.nv; v++)
+			for (let k = 0; k < 3; k++) {
+				ex[k].set(b.exit.subarray(v * 12 + k * 3, v * 12 + k * 3 + 3), v * 4);
+				ex[k][v * 4 + 3] = b.exit[v * 12 + 9 + k];
+			}
+		ex.forEach((a, k) => g.setAttribute(`kExit${k}`, new THREE.BufferAttribute(a, 4)));
+	}
+
+	/** Patch a material (any built-in with begin_vertex) to deform like `b`. */
+	patch<M extends THREE.Material>(material: M, b: BoundMesh, fragment?: (s: THREE.WebGLProgramParametersWithUniforms) => void, keySuffix = ''): M {
+		const own = { kColliders: { value: new THREE.Vector4(...b.colliders) }, kCapCount: { value: Math.min(MAX_CAPSULES, b.caps) } };
+		material.onBeforeCompile = (shader) => {
+			Object.assign(shader.uniforms, this.shared, own);
+			patchVertex(shader, this.defines);
+			fragment?.(shader);
+		};
+		material.customProgramCacheKey = () => this.key + keySuffix;
+		return material;
+	}
+
+	/** Shadow materials sharing the deformation. */
+	depthMaterials(b: BoundMesh): { depth: THREE.MeshDepthMaterial; distance: THREE.MeshDistanceMaterial } {
+		return {
+			depth: this.patch(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }), b),
+			distance: this.patch(new THREE.MeshDistanceMaterial(), b)
+		};
+	}
+
+	/** Flat ID material for GPU picking; deforms like `b`, or not at all for CPU-deformed meshes. */
+	pickMaterial(id: number, b: BoundMesh | null): THREE.MeshBasicMaterial {
+		const m = new THREE.MeshBasicMaterial({ toneMapped: false });
+		if (b) return this.patch(m, b, (s) => patchPickFragment(s, id), '-pick');
+		m.onBeforeCompile = (s) => patchPickFragment(s, id);
+		m.customProgramCacheKey = () => 'kinesy-pick';
+		return m;
+	}
+
+	dispose(): void {
+		this.data.dispose();
+		this.sdf.dispose();
+	}
+}
+
+/** Read back the id under a pixel from a 1x1 RGBA8 pick target. */
+export function decodePick(px: Uint8Array): number {
+	return px[0] | (px[1] << 8) | (px[2] << 16);
+}

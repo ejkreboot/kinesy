@@ -1,6 +1,6 @@
 import { Vector3 } from 'three';
 import { loadJointAssets } from './core/load';
-import { Rig } from './core/rig';
+import { Rig, type Pose } from './core/rig';
 import type { JointModule, MuscleInfo } from './joints/types';
 import type { AppContext, Panel } from './ui/context';
 import { PoseControls } from './ui/controls';
@@ -9,7 +9,9 @@ import { $, toggleButton } from './ui/dom';
 import { ExplorePanel } from './ui/explore';
 import { QuizPanel } from './ui/quiz';
 import { PoseAnimator } from './viewer/animator';
+import { benchDeformation } from './viewer/bench';
 import { JointModel } from './viewer/model';
+import { PathDebug } from './viewer/pathDebug';
 import { Stage } from './viewer/stage';
 
 export interface MountedJoint {
@@ -46,7 +48,7 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 	}
 	debug.msg('assets decoded');
 	const rig = new Rig(joint.rig, assets.manifest.axes, assets.manifest.bones);
-	const model = new JointModel(stage, assets, rig, joint.muscles, joint.deformer);
+	const model = new JointModel(stage, assets, rig, joint.muscles, joint.deformer, joint.paths);
 	model.onPosed = (ms) => debug.posed(ms);
 	for (const a of joint.axisOverlays) model.addAxis(a.joint, a.color, a.length, a.offset);
 	stage.setView(joint.view);
@@ -101,6 +103,20 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 		reset.addEventListener('click', () => stage.resetView());
 		tools.append(reset);
 	}
+	// #debug: muscle path overlay and deformation on/off
+	let pathDebug: PathDebug | null = null;
+	if (location.hash === '#debug' && model.muscleSystem && joint.paths) {
+		const pd = (pathDebug = new PathDebug(model.muscleSystem, joint.paths, assets.manifest.bones));
+		stage.scene.add(pd.group);
+		model.posed.push(() => pd.update());
+		tools.append(
+			toggleButton('Paths', false, (on) => {
+				pd.setVisible(on);
+				stage.requestRender();
+			}),
+			toggleButton('Deform', true, (on) => model.setDeformation(on))
+		);
+	}
 
 	const byKey = new Map<string, MuscleInfo>(joint.muscles.map((m) => [m.key, m]));
 	const ctx: AppContext = {
@@ -154,7 +170,17 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 		if (moved > 6 || !picking()) return;
 		panels[active]?.onPick?.(model.pick(e));
 	});
+	// hover picks render a pixel; do at most one per frame, for the latest pointer position
+	let hover: PointerEvent | null = null;
 	canvas.addEventListener('pointermove', (e) => {
+		if (!hover) requestAnimationFrame(() => {
+			const ev = hover!;
+			hover = null;
+			hoverAt(ev);
+		});
+		hover = e;
+	});
+	const hoverAt = (e: PointerEvent) => {
 		if (e.pointerType !== 'mouse' || down || !picking()) {
 			tip.hidden = true;
 			return;
@@ -172,13 +198,20 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 		tip.style.top = `${e.clientY - r.top}px`;
 		tip.hidden = false;
 		canvas.style.cursor = 'pointer';
-	});
+	};
 	canvas.addEventListener('pointerleave', () => (tip.hidden = true));
 
 	panels.explore!.activate();
 	debug.msg('ready');
-	// #debug: expose the live model for inspection from the console
-	if (location.hash === '#debug') Object.assign(window, { __kinesy: { joint, rig, model, stage } });
+	// #debug: expose the live model for inspection from the console; __kinesy.bench(from, to) times
+	// a sweep with the centerline deformation on and off
+	if (location.hash === '#debug')
+		Object.assign(window, {
+			__kinesy: {
+				joint, rig, model, stage, pathDebug,
+				bench: (from: Pose, to: Pose, frames?: number) => benchDeformation(stage, model, from, to, frames)
+			}
+		});
 	return {
 		dispose: () => {
 			animator.cancel();

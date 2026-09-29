@@ -1,6 +1,7 @@
 import type { JointAssetUrls } from '../core/load';
 import type { Vec3 } from '../core/math';
 import type { DeformerOptions } from '../core/deformer';
+import type { JointPaths } from '../core/muscle/schema';
 import type { Pose, RigDef } from '../core/rig';
 
 /** Everything the app needs to present one joint. Add a joint by implementing this. */
@@ -13,6 +14,11 @@ export interface JointModule {
 	rig: RigDef;
 	/** deformer settings for this joint (see DEFAULT_DEFORMER_OPTIONS) */
 	deformer?: Partial<DeformerOptions>;
+	/**
+	 * muscle lines of action; meshes listed here are deformed along them on the GPU, the rest by the
+	 * CPU deformer
+	 */
+	paths?: JointPaths;
 	/** one slider per joint degree of freedom, in display order */
 	controls: JointControl[];
 	/** muscles in list order; list groups follow first appearance of each `group` */

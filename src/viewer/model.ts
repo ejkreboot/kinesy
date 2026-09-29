@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { Deformer, type DeformerOptions } from '../core/deformer';
 import { rigidToMat4 } from '../core/math';
+import type { JointPaths } from '../core/muscle/schema';
+import { MuscleSystem } from '../core/muscle/system';
 import type { Pose, Rig } from '../core/rig';
 import type { JointAssets } from '../core/types';
 import type { MuscleInfo } from '../joints/types';
+import { decodePick, MuscleGpu } from './muscleGpu';
 import type { Stage } from './stage';
 
 export interface Focus {
@@ -19,28 +22,49 @@ export interface PickHit {
 }
 
 const BONE_COLOR = 0xe8e0cb;
+/** Layer the pick pass renders (muscle meshes only). */
+const PICK_LAYER = 7;
 
-/** three.js meshes for one joint, driven by the rig and deformer. */
+/**
+ * three.js meshes for one joint, driven by the rig. Muscles with a path (JointModule.paths) are
+ * deformed on the GPU along their solved centerlines (muscleGpu.ts); the rest by the CPU deformer.
+ */
 export class JointModel {
 	readonly deformer: Deformer;
+	/** centerline deformation, when the joint has paths */
+	readonly muscleSystem: MuscleSystem | null = null;
+	readonly gpu: MuscleGpu | null = null;
 	pose: Pose;
 	/** set to receive timing for each applied pose */
 	onPosed: ((ms: number) => void) | null = null;
+	/** called after each applied pose (debug overlays) */
+	readonly posed: (() => void)[] = [];
 	private readonly boneMeshes = new Map<string, THREE.Mesh>();
 	private readonly muscleMeshes = new Map<string, THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>>();
 	private readonly owner = new Map<string, string>();
 	private readonly info = new Map<string, MuscleInfo>();
+	/** CPU-deformed muscle meshes only */
 	private readonly out: Record<string, Float32Array> = {};
 	private readonly axisLines: { mesh: THREE.Mesh; joint: number; base: THREE.Matrix4 }[] = [];
 	private readonly visible = new Map<string, boolean>();
+	private readonly pickMats = new Map<THREE.Mesh, THREE.MeshBasicMaterial>();
+	private readonly pickParts: string[] = [];
+	private readonly pickTarget = new THREE.WebGLRenderTarget(1, 1);
+	private readonly pickPixel = new Uint8Array(4);
 	private focus: Focus | null = null;
 	private xray = false;
 	private dirty = true;
-	private readonly raycaster = new THREE.Raycaster();
 
-	constructor(private readonly stage: Stage, assets: JointAssets, private readonly rig: Rig, muscles: MuscleInfo[], opts: Partial<DeformerOptions> = {}) {
+	constructor(
+		private readonly stage: Stage, assets: JointAssets, private readonly rig: Rig, muscles: MuscleInfo[],
+		opts: Partial<DeformerOptions> = {}, paths?: JointPaths
+	) {
 		this.deformer = new Deformer(assets, rig, opts);
 		this.pose = rig.initialPose();
+		if (paths) {
+			this.muscleSystem = new MuscleSystem(paths, assets, rig);
+			this.gpu = new MuscleGpu(this.muscleSystem, assets);
+		}
 		for (const m of muscles) {
 			this.info.set(m.key, m);
 			this.visible.set(m.key, true);
@@ -56,6 +80,7 @@ export class JointModel {
 			stage.scene.add(mesh);
 			this.boneMeshes.set(b.name, mesh);
 		}
+		const sys = this.muscleSystem, gpu = this.gpu;
 		for (const m of assets.muscles) {
 			const key = this.owner.get(m.name);
 			if (!key) throw new Error(`Mesh ${m.name} is not assigned to a muscle`);
@@ -63,12 +88,33 @@ export class JointModel {
 			const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(this.info.get(key)!.color), roughness: 0.55, metalness: 0, transparent: true });
 			const mesh = new THREE.Mesh(g, mat);
 			mesh.userData = { muscle: key, part: m.name };
+			const bound = sys && gpu ? sys.bound[sys.meshes.findIndex((x) => x.name === m.name)] ?? null : null;
+			if (bound && gpu) {
+				// rest-pose buffers stay as they are; the vertex shader moves them
+				gpu.bindGeometry(g, bound);
+				gpu.patch(mat, bound);
+				const d = gpu.depthMaterials(bound);
+				mesh.customDepthMaterial = d.depth;
+				mesh.customDistanceMaterial = d.distance;
+				// bounds are the rest pose's; the deformed mesh can leave them
+				mesh.frustumCulled = false;
+			} else this.out[m.name] = g.attributes.position.array as Float32Array;
+			this.pickParts.push(m.name);
+			const pm = gpu ? gpu.pickMaterial(this.pickParts.length, bound) : flatPickMaterial(this.pickParts.length);
+			this.pickMats.set(mesh, pm);
+			mesh.layers.enable(PICK_LAYER);
 			stage.scene.add(mesh);
 			this.muscleMeshes.set(m.name, mesh);
-			this.out[m.name] = g.attributes.position.array as Float32Array;
 		}
 		stage.onBeforeRender(() => this.applyPose());
 		this.applyLook();
+	}
+
+	/** Whether the GPU deformation runs (debug: off shows path-driven muscles at rest). */
+	setDeformation(on: boolean): void {
+		if (!this.gpu) return;
+		this.gpu.enabled = on;
+		this.stage.requestRender();
 	}
 
 	setPose(pose: Pose): void {
@@ -128,11 +174,42 @@ export class JointModel {
 		this.applyLook();
 	}
 
+	/**
+	 * The muscle under a pointer: one pixel rendered with flat ID colours through the same
+	 * deformation the screen uses, so it hits what is shown at any pose, mid-animation included.
+	 */
 	pick(ev: { clientX: number; clientY: number }): PickHit | null {
-		this.raycaster.setFromCamera(this.stage.ndc(ev), this.stage.camera);
-		const targets = [...this.muscleMeshes.values()].filter((m) => m.visible && m.material.opacity > 0.3);
-		const hit = this.raycaster.intersectObjects(targets, false)[0];
-		return hit ? { muscle: hit.object.userData.muscle, part: hit.object.userData.part } : null;
+		this.applyPose();
+		const { renderer, scene, camera, canvas } = this.stage;
+		const r = canvas.getBoundingClientRect();
+		const x = ev.clientX - r.left, y = ev.clientY - r.top;
+		if (x < 0 || y < 0 || x >= r.width || y >= r.height) return null;
+		const swapped: [THREE.Mesh, THREE.Material, boolean][] = [];
+		for (const mesh of this.muscleMeshes.values()) {
+			swapped.push([mesh, mesh.material, mesh.visible]);
+			// what the raycast picked before: visible, not faded out
+			mesh.visible = mesh.visible && mesh.material.opacity > 0.3;
+			mesh.material = this.pickMats.get(mesh)! as unknown as THREE.MeshStandardMaterial;
+		}
+		const mask = camera.layers.mask, clear = renderer.getClearColor(new THREE.Color()), alpha = renderer.getClearAlpha();
+		camera.layers.set(PICK_LAYER);
+		camera.setViewOffset(r.width, r.height, x, y, 1, 1);
+		renderer.setRenderTarget(this.pickTarget);
+		renderer.setClearColor(0x000000, 0);
+		renderer.clear();
+		renderer.render(scene, camera);
+		renderer.readRenderTargetPixels(this.pickTarget, 0, 0, 1, 1, this.pickPixel);
+		renderer.setRenderTarget(null);
+		renderer.setClearColor(clear, alpha);
+		camera.clearViewOffset();
+		camera.layers.mask = mask;
+		for (const [mesh, mat, vis] of swapped) {
+			mesh.material = mat as THREE.MeshStandardMaterial;
+			mesh.visible = vis;
+		}
+		const id = decodePick(this.pickPixel);
+		const part = id ? this.pickParts[id - 1] : undefined;
+		return part ? { muscle: this.owner.get(part)!, part } : null;
 	}
 
 	private applyLook(): void {
@@ -153,23 +230,30 @@ export class JointModel {
 		this.stage.requestRender();
 	}
 
-	private applyPose(): void {
+	/** Bring meshes to the current pose if it changed (runs before each render and pick). */
+	applyPose(): void {
 		if (!this.dirty) return;
 		this.dirty = false;
 		const t0 = performance.now();
-		this.deformer.update(this.pose, this.out);
-		const mats = this.rig.def.bones.map((_, i) => new THREE.Matrix4().fromArray(this.deformer.boneMatrix(i)));
+		if (this.muscleSystem && this.gpu) {
+			this.muscleSystem.update(this.pose);
+			this.gpu.update();
+		}
+		const cpu = Object.keys(this.out);
+		if (cpu.length) this.deformer.update(this.pose, this.out);
+		const mats = this.rig.solve(this.pose).map((w) => new THREE.Matrix4().fromArray(rigidToMat4(w)));
 		for (const m of this.boneMeshes.values()) m.matrix.copy(mats[m.userData.bone as number]);
 		if (this.axisLines.length) {
 			const frames = this.rig.solveFrames(this.pose).joints;
 			for (const a of this.axisLines) a.mesh.matrix.fromArray(rigidToMat4(frames[a.joint])).multiply(a.base);
 		}
-		for (const m of this.muscleMeshes.values()) {
-			const g = m.geometry;
+		for (const name of cpu) {
+			const g = this.muscleMeshes.get(name)!.geometry;
 			g.attributes.position.needsUpdate = true;
 			g.computeVertexNormals();
 			g.computeBoundingSphere();
 		}
+		for (const f of this.posed) f();
 		this.onPosed?.(performance.now() - t0);
 	}
 }
@@ -180,4 +264,10 @@ function geometry(pos: Float32Array, index: Uint16Array | Uint32Array): THREE.Bu
 	g.setIndex(new THREE.BufferAttribute(index, 1));
 	g.computeVertexNormals();
 	return g;
+}
+
+/** ID material for joints without paths (every muscle CPU-deformed). */
+function flatPickMaterial(id: number): THREE.MeshBasicMaterial {
+	const c = new THREE.Color().setRGB((id & 255) / 255, ((id >> 8) & 255) / 255, ((id >> 16) & 255) / 255, THREE.LinearSRGBColorSpace);
+	return new THREE.MeshBasicMaterial({ color: c, toneMapped: false });
 }

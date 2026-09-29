@@ -4,6 +4,7 @@ import fieldsUrl from '../../../assets/elbow/fields.bin.gz?url';
 import type { AssetManifest } from '../../core/types';
 import type { JointModule } from '../types';
 import { movements, muscles, scenarios } from './content';
+import { elbowPaths } from './paths';
 import { reference } from './reference';
 import { elbowRig } from './rig';
 
@@ -18,6 +19,7 @@ export const elbow: JointModule = {
 	subtitle: 'Right arm · anterolateral view · drag to rotate',
 	assets: { manifest: manifest as unknown as AssetManifest, geometry: geometryUrl, fields: fieldsUrl },
 	rig: elbowRig,
+	paths: elbowPaths,
 	controls: [
 		{ joint: 'flexion', label: 'Elbow flexion', format: (v) => `${Math.round(v)}°`, ticks: ['0° ext', '90°', '145°'] },
 		{ joint: 'pronation', label: 'Forearm', format: forearm, ticks: ['Sup 90°', 'Neutral', 'Pron 80°'] }
