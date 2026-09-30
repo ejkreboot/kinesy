@@ -50,6 +50,11 @@ export class PathDebug {
 				geo = new THREE.CylinderGeometry(s.radius, s.radius, 50, 20, 4, true);
 				const a = new THREE.Vector3(...s.axis).normalize();
 				base.compose(new THREE.Vector3(...s.center), new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), a), new THREE.Vector3(1, 1, 1));
+			} else if (s.kind === 'rim') {
+				geo = new THREE.CircleGeometry(1, 48);
+				const x = new THREE.Vector3(...s.axes[0]).normalize(), y0 = new THREE.Vector3(...s.axes[1]);
+				const y = y0.sub(x.clone().multiplyScalar(y0.dot(x))).normalize(), z = x.clone().cross(y);
+				base.makeBasis(x, y, z).scale(new THREE.Vector3(s.radii[0], s.radii[1], 1)).setPosition(...s.center);
 			} else {
 				geo = new THREE.SphereGeometry(1, 20, 12);
 				const x = new THREE.Vector3(...(s.axes?.[0] ?? [1, 0, 0])).normalize();

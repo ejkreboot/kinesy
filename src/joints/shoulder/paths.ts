@@ -28,7 +28,12 @@ export const shoulderPaths: JointPaths = {
 		// center lies deep and medial of the angle, inside the chest, so their line always passes it on
 		// the lateral and posterior side and they wrap behind; it rides the scapula and stays clear of
 		// the humerus even with the arm across the chest.
-		scapulaAngle: { kind: 'ellipsoid', bone: 'scapula', center: [100, -110, 40], radii: [70, 60, 145] }
+		scapulaAngle: { kind: 'ellipsoid', bone: 'scapula', center: [100, -110, 40], radii: [70, 60, 145] },
+		// the rib cage's right half (fitted to its outer surface, 3 mm RMS; poorest near the thoracic inlet),
+		// 4 mm out: the lower pectoralis major lies over it
+		chestPec: { kind: 'ellipsoid', bone: 'thorax', center: [109.8, -144.7, 34.5], radii: [83.7, 195.7, 103.2], axes: [[0.946, -0.105, -0.305], [0.042, 0.978, -0.206]] },
+		// the humeral head under the pectoralis major's tendon, over the biceps tendon and subscapularis
+		pecHead: { kind: 'ellipsoid', bone: 'humerus', center: [-1.6, 1.1, 0], radii: [32, 32, 32] }
 	},
 	muscles: [
 		{
@@ -108,7 +113,10 @@ export const shoulderPaths: JointPaths = {
 			layer: 1,
 			strands: [[
 				{ bone: 'scapula', p: [64.1, -3.3, -66.7] }, // spine of the scapula
+				// along its fleshy origin on the spine and acromion (mesh centerline)
 				{ bone: 'scapula', p: [40.1, 3.3, -60] },
+				{ bone: 'scapula', p: [27.4, 3.2, -57.1] },
+				{ bone: 'scapula', p: [14.5, 3.8, -54] },
 				{ wrap: 'humeralHeadDeltoid' },
 				{ bone: 'humerus', p: [-46.3, -81.1, -19] },
 				{ bone: 'humerus', p: [-42, -123.3, -9.9] } // deltoid tuberosity
@@ -146,6 +154,49 @@ export const shoulderPaths: JointPaths = {
 				k < 4 ? { wrap: 'scapulaBack', side: -1 as const } : { wrap: 'scapulaAngle' },
 				{ bone: 'thorax', p }
 			])
+		},
+		// DRAFT (work in progress): long head of triceps and pectoralis major. Strand ends from the attachment
+		// footprints on the meshes, paired across each sheet; each strand's wraps the candidates that kept it
+		// closest to its reference taut path (4 mm off bone, rib cage solid) over the range, without frame jumps.
+		{
+			mesh: 'triceps_long',
+			layer: 1,
+			anchor: [16, 8],
+			strands: [[
+				{ bone: 'scapula', p: [20.3, -20.1, -17.6] }, // infraglenoid tubercle
+				{ wrap: 'humeralHeadCuff' },
+				{ bone: 'humerus', p: [-45.5, -275.9, -27.9] } // (the elbow isn't in this model: rides the humerus)
+			]]
+		},
+		{
+			mesh: 'pec_clav',
+			layer: 2,
+			// medial half of the clavicle; the lowest part of the insertion (lateral lip of the intertubercular groove)
+			strands: [
+				[{ bone: 'humerus', p: [-21.9, -46.4, 11.3] }, { bone: 'clavicle', p: [80.8, 24.8, 44.7] }],
+				[{ bone: 'humerus', p: [-25.6, -59.8, 10.7] }, { bone: 'clavicle', p: [95.4, 22.3, 57.5] }],
+				[{ bone: 'humerus', p: [-28.4, -72.7, 10.5] }, { bone: 'clavicle', p: [122.9, 19.1, 68.1] }]
+			]
+		},
+		{
+			mesh: 'pec_stern',
+			layer: 2,
+			// sternum and upper costal cartilages, lowest first
+			strands: [
+				[{ bone: 'humerus', p: [-22.4, -61.1, 10.6] }, { wrap: 'chestPec' }, { bone: 'thorax', p: [89.5, -147.4, 125] }],
+				[{ bone: 'humerus', p: [-18.4, -48.4, 10.8] }, { wrap: 'chestPec' }, { bone: 'thorax', p: [115.5, -116.2, 123.7] }],
+				[{ bone: 'humerus', p: [-17.6, -42.5, 10.8] }, { wrap: 'pecHead' }, { bone: 'thorax', p: [148.2, -67.5, 116.4] }],
+				[{ bone: 'humerus', p: [-16.8, -39.7, 10.9] }, { wrap: 'pecHead' }, { bone: 'thorax', p: [146, -11.7, 91] }]
+			]
+		},
+		{
+			mesh: 'pec_abd',
+			layer: 2,
+			// lower costal cartilages and the rectus sheath: the highest part of the insertion (the tendon's twist)
+			strands: [
+				[{ bone: 'humerus', p: [-14.2, -45.9, 10.3] }, { wrap: 'chestPec' }, { bone: 'thorax', p: [87.7, -197.2, 126.5] }],
+				[{ bone: 'humerus', p: [-11.9, -36.8, 10.7] }, { wrap: 'chestPec' }, { bone: 'thorax', p: [104.1, -188.1, 130.7] }]
+			]
 		}
 	],
 	// muscles lying between scapula, humerus and ribs: a second pass shuttles vertices between them

@@ -24,9 +24,9 @@
  */
 import { qMul, qRotate, qToMat3, type Quat, type Rigid, type Vec3 } from '../math';
 import type { Pose, Rig } from '../rig';
-import { isJoin, isPoint, type JointPaths, type MusclePathDef, type WrapSurface } from './schema';
+import { isJoin, isPoint, type JointPaths, type MusclePathDef, type RimSurface, type WrapSurface } from './schema';
 import { resetContacts, resolveContacts, type ContactModel } from './strandContact';
-import { perpendicular, wrapCylinder, wrapEllipsoid } from './wrap';
+import { minimize1D, perpendicular, rimBlocked, rimPoint, rimRange, wrapCylinder, wrapEllipsoid, type Rim } from './wrap';
 
 export interface PathOptions {
 	/**
@@ -50,7 +50,8 @@ export interface PathOptions {
 
 export const DEFAULT_PATH_OPTIONS: PathOptions = { unwrapSteps: 6, bellyFrac: 0.8, kMin: 0.8, kMax: 1.3, smooth: 6 };
 
-type WrapElement = { point: false; surface: number; side: number };
+/** arc: a rim's allowed arc, radians (from < to) */
+type WrapElement = { point: false; surface: number; side: number; arc?: [number, number] };
 type Element = { point: true; bone: number; p: Vec3 } | WrapElement;
 
 /** Samples over which a strand's end direction is taken, for its end frames. */
@@ -71,7 +72,7 @@ interface Surface {
 	bone: number;
 	/** unit axis (cylinder) */
 	axis: Vec3;
-	/** column-major local axes (ellipsoid) */
+	/** column-major local axes (ellipsoid; rim: u, v, normal) */
 	R: number[];
 }
 
@@ -167,8 +168,8 @@ export class PathSolver {
 			surfaceIndex.set(name, this.surfaces.length);
 			const axis = s.kind === 'cylinder' ? unit(s.axis) : ([0, 0, 1] as Vec3);
 			let R = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-			if (s.kind === 'ellipsoid' && s.axes) {
-				const x = unit(s.axes[0]), y0 = s.axes[1];
+			if ((s.kind === 'ellipsoid' && s.axes) || s.kind === 'rim') {
+				const x = unit(s.axes![0]), y0 = s.axes![1];
 				const d = dot(x, y0), y = unit([y0[0] - d * x[0], y0[1] - d * x[1], y0[2] - d * x[2]]);
 				R = [...x, ...y, ...cross(x, y)];
 			}
@@ -194,7 +195,11 @@ export class PathSolver {
 					if (isPoint(e)) return { point: true, bone: boneIndex(e.bone, where), p: [...e.p] as Vec3 };
 					const s = surfaceIndex.get(e.wrap);
 					if (s === undefined) throw new Error(`${where}: unknown surface ${e.wrap}`);
-					return { point: false, surface: s, side: e.side ?? 0 };
+					if (!e.arc) return { point: false, surface: s, side: e.side ?? 0 };
+					if (this.surfaces[s].def.kind !== 'rim') throw new Error(`${where}: an arc is for rims only (${e.wrap})`);
+					let [a0, a1] = e.arc.map((d) => (d * Math.PI) / 180);
+					while (a1 <= a0) a1 += 2 * Math.PI;
+					return { point: false, surface: s, side: 0, arc: [a0, a1] as [number, number] };
 				});
 				const first = els[0] as { bone: string };
 				const twist = new Float64Array(this.N);
@@ -499,6 +504,11 @@ export class PathSolver {
 	 * wrap is.
 	 */
 	private wrapRun(run: WrapElement[], P: Vec3, S: Vec3, bones: Rigid[], out: number[]): void {
+		const r = run.findIndex((e) => this.surfaces[e.surface].def.kind === 'rim');
+		if (r >= 0) {
+			this.rimRun(run, r, P, S, bones, out);
+			return;
+		}
 		if (run.length === 1) {
 			this.wrapInto(run[0], P, S, bones, out);
 			return;
@@ -521,11 +531,58 @@ export class PathSolver {
 		for (const p of pts) for (const v of p) out.push(v);
 	}
 
+	/**
+	 * A run holding a rim (run[r]): solved without it first. Where that way is blocked by the rim (it
+	 * crosses the plate, or the wall beyond the rim's arc), the path goes over the rim instead, at the
+	 * point where the wraps before the rim (from P) and after it (to S) make it shortest. Where the free
+	 * way just touches the rim or the wall that point is where it crosses, so the rim engages smoothly.
+	 */
+	private rimRun(run: WrapElement[], r: number, P: Vec3, S: Vec3, bones: Rigid[], out: number[]): void {
+		const before = run.slice(0, r), after = run.slice(r + 1), rest = before.concat(after);
+		const free: number[] = [];
+		if (rest.length) this.wrapRun(rest, P, S, bones, free);
+		const rim = this.rimAt(run[r], bones);
+		if (!rimBlocked(rim, [...P, ...free, ...S])) {
+			for (const v of free) out.push(v);
+			return;
+		}
+		const tmp: number[] = [];
+		// length of the way from A through the run's wraps `els` to B
+		const leg = (els: WrapElement[], A: Vec3, B: Vec3): number => {
+			if (!els.length) return Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]);
+			tmp.length = 0;
+			this.wrapRun(els, A, B, bones, tmp);
+			const m = tmp.length;
+			if (!m) return Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]);
+			let L = Math.hypot(tmp[0] - A[0], tmp[1] - A[1], tmp[2] - A[2]) + Math.hypot(B[0] - tmp[m - 3], B[1] - tmp[m - 2], B[2] - tmp[m - 1]);
+			for (let k = 3; k < m; k += 3) L += Math.hypot(tmp[k] - tmp[k - 3], tmp[k + 1] - tmp[k - 2], tmp[k + 2] - tmp[k - 1]);
+			return L;
+		};
+		const [lo, hi] = rimRange(rim);
+		const s = minimize1D((t) => { const X = rimPoint(rim, t); return leg(before, P, X) + leg(after, X, S); }, lo, hi, !rim.arc);
+		const X = rimPoint(rim, s);
+		if (before.length) this.wrapRun(before, P, X, bones, out);
+		out.push(X[0], X[1], X[2]);
+		if (after.length) this.wrapRun(after, X, S, bones, out);
+	}
+
+	/** A rim use in world space at `bones`. */
+	private rimAt(e: WrapElement, bones: Rigid[]): Rim {
+		const sf = this.surfaces[e.surface], d = sf.def as RimSurface, b = bones[sf.bone], R = sf.R;
+		const cr = qRotate(b.q, d.center);
+		return {
+			c: [cr[0] + b.t[0], cr[1] + b.t[1], cr[2] + b.t[2]],
+			u: qRotate(b.q, [R[0], R[1], R[2]]), v: qRotate(b.q, [R[3], R[4], R[5]]), n: qRotate(b.q, [R[6], R[7], R[8]]),
+			a: d.radii[0], b: d.radii[1], arc: e.arc ?? null
+		};
+	}
+
 	private wrapInto(e: { surface: number; side: number }, P: Vec3, S: Vec3, bones: Rigid[], out: number[]): boolean {
 		const sf = this.surfaces[e.surface], b = bones[sf.bone], d = sf.def;
 		const cr = qRotate(b.q, d.center);
 		const c: Vec3 = [cr[0] + b.t[0], cr[1] + b.t[1], cr[2] + b.t[2]];
 		if (d.kind === 'cylinder') return wrapCylinder(P, S, c, qRotate(b.q, sf.axis), d.radius, e.side, out, d.extent);
+		if (d.kind === 'rim') throw new Error('rims are solved with their run (rimRun)');
 		const M = qToMat3(b.q), R = sf.R, Rw: number[] = new Array(9);
 		for (let col = 0; col < 3; col++)
 			for (let row = 0; row < 3; row++) Rw[col * 3 + row] = M[row] * R[col * 3] + M[3 + row] * R[col * 3 + 1] + M[6 + row] * R[col * 3 + 2];

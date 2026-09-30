@@ -1,5 +1,6 @@
 /**
- * Closed-form wrapping of a straight segment P → S over a cylinder or an ellipsoid.
+ * Closed-form wrapping of a straight segment P → S over a cylinder or an ellipsoid, and the geometry
+ * of rims (flat plates a path bends over; the search for where is the path solver's, path.ts).
  *
  * Both reduce to one 2D problem: going counterclockwise around a circle at the origin from p to s,
  * the path leaves p along a tangent, follows the circle, and leaves it along a tangent to s. On
@@ -193,6 +194,94 @@ export function wrapEllipsoid(P: Vec3, S: Vec3, c: Vec3, radii: Vec3, R: number[
 	}
 	if (sIn) at((sx * 1.001) / sl, (sy * 1.001) / sl);
 	return !!w || pIn || sIn;
+}
+
+/**
+ * A rim in world space: centre, in-plane unit axes u and v, plate normal n = u × v, semi-axes a and b,
+ * and the arc a path may pass over (radians from u toward v, from < to), null for the whole rim.
+ */
+export interface Rim {
+	c: Vec3;
+	u: Vec3;
+	v: Vec3;
+	n: Vec3;
+	a: number;
+	b: number;
+	arc: [number, number] | null;
+}
+
+/** Length of the wall beyond each end of a rim's arc, in mean radii (the boundary parameter's unit). */
+const RIM_WALL = 3;
+
+/**
+ * Range of the parameter along a rim's boundary: [0, 2π) round the whole ellipse (periodic), or the arc
+ * with the wall running out radially from each end: −RIM_WALL … 0 out along the first end's wall, 0 … span
+ * along the arc, beyond the span out along the second end's.
+ */
+export function rimRange(rim: Rim): [number, number] {
+	return rim.arc ? [-RIM_WALL, rim.arc[1] - rim.arc[0] + RIM_WALL] : [0, 2 * Math.PI];
+}
+
+/** Point on a rim's boundary at parameter s (see rimRange). */
+export function rimPoint(rim: Rim, s: number): Vec3 {
+	let th = s, out = 0;
+	if (rim.arc) {
+		const span = rim.arc[1] - rim.arc[0];
+		if (s < 0) { th = rim.arc[0]; out = -s; }
+		else if (s > span) { th = rim.arc[1]; out = s - span; }
+		else th = rim.arc[0] + s;
+	}
+	const x = Math.cos(th) * rim.a, y = Math.sin(th) * rim.b;
+	// the wall runs radially (constant ellipse angle), so it meets the blocked test in rimBlocked exactly
+	const k = 1 + (out * (rim.a + rim.b)) / 2 / Math.hypot(x, y);
+	const { c, u, v } = rim;
+	return [c[0] + k * (x * u[0] + y * v[0]), c[1] + k * (x * u[1] + y * v[1]), c[2] + k * (x * u[2] + y * v[2])];
+}
+
+/**
+ * Whether polyline `pts` (x y z …, from the path's start to its end) is blocked by a rim: where it first
+ * crosses the plate's plane from the start's side, it passes inside the ellipse, or outside it beyond the
+ * arc (through the wall). A path whose ends lie on one side of the plane is never blocked.
+ */
+export function rimBlocked(rim: Rim, pts: ArrayLike<number>): boolean {
+	const { c, n } = rim, m = pts.length / 3;
+	const side = (k: number) => (pts[k * 3] - c[0]) * n[0] + (pts[k * 3 + 1] - c[1]) * n[1] + (pts[k * 3 + 2] - c[2]) * n[2];
+	const d0 = side(0);
+	if (d0 * side(m - 1) >= 0) return false;
+	let prev = d0;
+	for (let k = 1; k < m; k++) {
+		const dk = side(k);
+		if (dk * d0 > 0) { prev = dk; continue; }
+		const t = prev / (prev - dk), o = (k - 1) * 3, q = [0, 1, 2].map((j) => pts[o + j] + (pts[o + 3 + j] - pts[o + j]) * t - c[j]);
+		const x = (q[0] * rim.u[0] + q[1] * rim.u[1] + q[2] * rim.u[2]) / rim.a, y = (q[0] * rim.v[0] + q[1] * rim.v[1] + q[2] * rim.v[2]) / rim.b;
+		if (x * x + y * y < 1) return true;
+		if (!rim.arc) return false;
+		const th = (((Math.atan2(y, x) - rim.arc[0]) % TAU) + TAU) % TAU;
+		return th > rim.arc[1] - rim.arc[0];
+	}
+	return false;
+}
+
+/**
+ * Parameter in [lo, hi] (periodic if asked) where f is least: the best of `n` samples, refined by golden
+ * section between its neighbours.
+ */
+export function minimize1D(f: (s: number) => number, lo: number, hi: number, periodic: boolean, n = 24): number {
+	const h = (hi - lo) / (periodic ? n : n - 1);
+	let best = 0, fb = Infinity;
+	for (let k = 0; k < n; k++) {
+		const v = f(lo + k * h);
+		if (v < fb) { fb = v; best = k; }
+	}
+	let a = lo + (best - 1) * h, b = lo + (best + 1) * h;
+	if (!periodic) { a = Math.max(lo, a); b = Math.min(hi, b); }
+	const g = (Math.sqrt(5) - 1) / 2;
+	let x1 = b - g * (b - a), x2 = a + g * (b - a), f1 = f(x1), f2 = f(x2);
+	for (let it = 0; it < 30; it++) {
+		if (f1 < f2) { b = x2; x2 = x1; f2 = f1; x1 = b - g * (b - a); f1 = f(x1); }
+		else { a = x1; x1 = x2; f1 = f2; x2 = a + g * (b - a); f2 = f(x2); }
+	}
+	return (a + b) / 2;
 }
 
 /** Length beyond a cylinder's extent over which its wrap fades to a straight line, mm. */

@@ -56,7 +56,22 @@ export interface EllipsoidSurface {
 	axes?: [Vec3, Vec3];
 }
 
-export type WrapSurface = CylinderSurface | EllipsoidSurface;
+/**
+ * A flat ellipse a path may not pass through: a plate, like the glenoid with its rim. A path whose way
+ * between its neighbouring points (wraps before and after it included) would cross the plate bends over
+ * the rim where that makes it shortest, like a string over a plate's edge. Tendons that pass a joint's
+ * socket on their way to a fossa behind it (the rotator cuff) stay off the socket and its neck this way.
+ */
+export interface RimSurface {
+	kind: 'rim';
+	bone: string;
+	center: Vec3;
+	/** the ellipse's semi-axis directions (made perpendicular); the plate's normal is their cross product */
+	axes: [Vec3, Vec3];
+	radii: [number, number];
+}
+
+export type WrapSurface = CylinderSurface | EllipsoidSurface | RimSurface;
 
 /**
  * Use of a named wrap surface between the path points around it.
@@ -66,10 +81,15 @@ export type WrapSurface = CylinderSurface | EllipsoidSurface;
  * passes on, so the path never swaps sides as the joint moves. A wrap is taken only while the
  * straight line would cross the surface on that side; it lifts off where the two tangent points
  * meet, so there is no jump. Ellipsoids wrap the short way round and ignore `side`.
+ *
+ * Rims: `arc` is the part of the rim this path may pass over, [from, to] in degrees from the first
+ * axis toward the second. Beyond its ends the plate's plane is closed as well (a wall running out from
+ * the rim), so the path can't swing round the far side of the socket. The whole rim if left out.
  */
 export interface WrapUse {
 	wrap: string;
 	side?: 1 | -1;
+	arc?: [number, number];
 }
 
 /**
