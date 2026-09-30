@@ -23,7 +23,7 @@ export class MuscleSystem {
 	readonly bound: BoundMesh[];
 	readonly meshes: MuscleMesh[];
 	readonly restNormals: Float32Array[];
-	/** contact between layers; null when turned off (opts.contact false) */
+	/** contact between layers (and muscles beside one another); null when there is none */
 	readonly contact: ContactModel | null;
 	readonly proxies: ProxySpec[];
 	/** proxy capsules at the last update (8 floats each) */
@@ -43,8 +43,12 @@ export class MuscleSystem {
 		});
 		this.bound = this.meshes.map((m) => bindMesh(this.solver, m.name, m.rest, m.index, assets.fields, bones));
 		this.restNormals = this.meshes.map((m) => vertexNormals(m.rest, m.index, m.nv));
-		const contact = opts.contact ?? paths.contact;
-		this.contact = contact === false ? null : buildContactModel(this.solver, this.bound, assets.fields, contact);
+		// turned off, contact is still kept between muscles named beside one another
+		const contact = opts.contact ?? paths.contact, beside = paths.muscles.some((m) => m.beside?.length);
+		this.contact =
+			contact !== false ? buildContactModel(this.solver, this.bound, assets.fields, contact)
+			: beside ? buildContactModel(this.solver, this.bound, assets.fields, { layers: false })
+			: null;
 		this.solver.setContact(this.contact);
 		this.proxies = opts.proxies ? buildProxies(this.solver, this.bound) : [];
 		this.capsules = new Float32Array(this.proxies.length * 8);

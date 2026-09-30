@@ -9,8 +9,9 @@
  * there); keep them in sync.
  *
  * Texture layout (RGBA32F, see PathSolver.writeTexture): row s < strands holds sample i's
- * position + bulge at texel 2i and its frame quaternion at 2i+1, and (origin bone, insertion bone)
- * at 2N; the last row holds bone b's translation at 2b and rotation at 2b+1.
+ * position + spacing at texel 2i and its frame quaternion at 2i+1, (origin bone, insertion bone,
+ * bulge factor, length) at 2N and (drape kept, 0, 0, 0) at 2N+1; the last row holds bone b's
+ * translation at 2b and rotation at 2b+1.
  */
 import * as THREE from 'three';
 import type { BoundMesh } from '../core/muscle/bind';
@@ -38,6 +39,8 @@ attribute vec3 kOffset;
 attribute vec3 kNormal;
 attribute vec4 kWeights;         // belly, origin anchor, insertion anchor, rest proxy clearance
 attribute vec4 kClear;           // rest clearance per collider slot
+attribute float kWindow;         // half-width of the frame's averaging window along the strand, mm
+attribute vec3 kDrape;           // the vertex's part of the rest drape (let go as the strand turns)
 
 vec3 kPos;
 vec3 kNrm;
@@ -51,16 +54,34 @@ vec4 kTexel(int x, int y) {
 	return texelFetch(kData, ivec2(x, y), 0);
 }
 
-void kStrand(int row, float s, out vec3 c, out vec4 q, out float k) {
+// frame and spacing on a strand at share s
+void kStrand(int row, float s, out vec3 c, out vec4 q, out float spacing) {
 	highp float f = clamp(s, 0.0, 1.0) * float(K_SAMPLES - 1);
 	int i = min(int(f), K_SAMPLES - 2);
 	highp float u = f - float(i);
 	vec4 p0 = kTexel(2 * i, row), p1 = kTexel(2 * i + 2, row);
 	vec4 q0 = kTexel(2 * i + 1, row), q1 = kTexel(2 * i + 3, row);
 	c = mix(p0.xyz, p1.xyz, u);
-	k = p0.w;
+	spacing = mix(p0.w, p1.w, u);
 	if (dot(q0, q1) < 0.0) q1 = -q1;
 	q = normalize(mix(q0, q1, u));
+}
+
+// the same averaged over kWindow mm either side of s (weights 1/4, 1/2, 1/4; see core/muscle/deform.ts)
+void kWindowed(int row, float s, float len, out vec3 c, out vec4 q, out float spacing) {
+	kStrand(row, s, c, q, spacing);
+	if (kWindow <= 0.0) return;
+	float d = kWindow / max(len, 1e-6);
+	vec3 ca, cb;
+	vec4 qa, qb;
+	float sa, sb;
+	kStrand(row, s - d, ca, qa, sa);
+	kStrand(row, s + d, cb, qb, sb);
+	if (dot(qa, q) < 0.0) qa = -qa;
+	if (dot(qb, q) < 0.0) qb = -qb;
+	c = 0.5 * c + 0.25 * (ca + cb);
+	q = normalize(0.5 * q + 0.25 * (qa + qb));
+	spacing = 0.5 * spacing + 0.25 * (sa + sb);
 }
 
 void kBone(int b, out vec3 t, out vec4 q) {
@@ -150,26 +171,30 @@ void kDeform() {
 	kNrm = normal;
 	if (kEnabled < 0.5) return;
 	int ra = int(kPath.z + 0.5), rb = int(kPath.w + 0.5);
+	vec4 meta = kTexel(2 * K_SAMPLES, ra);
 	vec3 c;
 	vec4 q;
-	float k;
-	kStrand(ra, kPath.x, c, q, k);
+	float k = meta.z, spacing, keep = kTexel(2 * K_SAMPLES + 1, ra).x;
+	kWindowed(ra, kPath.x, meta.w, c, q, spacing);
 	if (rb != ra && kPath.y > 0.0) {
+		vec4 meta2 = kTexel(2 * K_SAMPLES, rb);
 		vec3 c2;
 		vec4 q2;
-		float k2;
-		kStrand(rb, kPath.x, c2, q2, k2);
+		float sp2;
+		kWindowed(rb, kPath.x, meta2.w, c2, q2, sp2);
 		c = mix(c, c2, kPath.y);
 		if (dot(q, q2) < 0.0) q2 = -q2;
 		q = normalize(mix(q, q2, kPath.y));
-		k = mix(k, k2, kPath.y);
+		k = mix(k, meta2.z, kPath.y);
+		spacing = mix(spacing, sp2, kPath.y);
+		keep = mix(keep, kTexel(2 * K_SAMPLES + 1, rb).x, kPath.y);
 	}
 	float gk = 1.0 + (k - 1.0) * kWeights.x;
-	vec3 p = c + kRot(q, vec3(kOffset.x, kOffset.yz * gk));
-	vec3 n = kRot(q, normalize(vec3(kNormal.x * gk, kNormal.yz)));
+	vec3 p = c + kRot(q, vec3(kOffset.x * spacing, (kOffset.yz - (1.0 - keep) * kDrape.yz) * gk));
+	// normals take the inverse transpose of that scaling
+	vec3 n = kRot(q, normalize(vec3(kNormal.x * gk / spacing, kNormal.yz)));
 
 	// ride the attachment bones rigidly near the ends
-	vec4 meta = kTexel(2 * K_SAMPLES, ra);
 	vec3 bt;
 	vec4 bq;
 	if (kWeights.y > 0.0) {
@@ -350,6 +375,8 @@ export class MuscleGpu {
 		g.setAttribute('kNormal', new THREE.BufferAttribute(b.normal, 3));
 		g.setAttribute('kWeights', new THREE.BufferAttribute(b.weights, 4));
 		g.setAttribute('kClear', new THREE.BufferAttribute(b.clear, 4));
+		g.setAttribute('kWindow', new THREE.BufferAttribute(b.window, 1));
+		g.setAttribute('kDrape', new THREE.BufferAttribute(b.drape, 3));
 	}
 
 	/** Patch a material (any built-in with begin_vertex) to deform like `b`. */

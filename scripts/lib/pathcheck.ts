@@ -26,6 +26,8 @@ export interface JointSpec {
 	poses: Pose[];
 	/** joints swept over their whole range for continuity checks, each at every pose of its `at` */
 	sweeps: { joint: string; at: Pose[] }[];
+	/** bones whose fields are hollow shells (the rib cage), filled for routing (solid.ts) */
+	solid?: string[];
 }
 
 export const JOINTS: Record<string, JointSpec> = {
@@ -42,9 +44,10 @@ export const JOINTS: Record<string, JointSpec> = {
 		rig: shoulderRig,
 		paths: shoulderPaths,
 		poses: [
-			{}, { flexion: 90 }, { flexion: 180 }, { flexion: -60 }, { abduction: 90 }, { abduction: 180 }, { abduction: -40 },
-			{ abduction: 90, rotation: -90 }, { abduction: 90, rotation: 70 }, { flexion: 90, rotation: 70 },
-			{ rotation: -90 }, { rotation: 70 }, { protraction: 25 }, { protraction: -25 }, { elevation: 35 }
+			{}, { flexion: 90 }, { flexion: 180 }, { flexion: -10 }, { abduction: 90 }, { abduction: 180 },
+			{ abduction: 90, rotation: -30 }, { abduction: 90, rotation: 70 }, { flexion: 90, rotation: 70 },
+			{ rotation: -30 }, { rotation: 70 }, { protraction: 25 }, { protraction: -25 }, { elevation: 35 },
+			{ flexion: 90, abduction: 50 }, { flexion: 90, abduction: 10, protraction: 15 }
 		],
 		sweeps: [
 			{ joint: 'flexion', at: [{}] },
@@ -52,7 +55,8 @@ export const JOINTS: Record<string, JointSpec> = {
 			{ joint: 'rotation', at: [{}, { abduction: 90 }] },
 			{ joint: 'protraction', at: [{}] },
 			{ joint: 'elevation', at: [{}] }
-		]
+		],
+		solid: ['thorax']
 	}
 };
 

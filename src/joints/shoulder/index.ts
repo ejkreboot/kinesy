@@ -30,9 +30,9 @@ export const shoulder: JointModule = {
 	rig: shoulderRig,
 	paths: shoulderPaths,
 	controls: [
-		{ joint: 'flexion', label: 'Flexion', format: signed('Ext', 'Flex'), ticks: ['Ext 60°', '60°', 'Flex 180°'] },
-		{ joint: 'abduction', label: 'Abduction', format: signed('Add', 'Abd'), ticks: ['Add 40°', '70°', 'Abd 180°'] },
-		{ joint: 'rotation', label: 'Rotation', format: signed('ER', 'IR'), ticks: ['ER 90°', '', 'IR 70°'] },
+		{ joint: 'flexion', label: 'Flexion', format: signed('Ext', 'Flex'), ticks: ['Ext 10°', '85°', 'Flex 180°'] },
+		{ joint: 'abduction', label: 'Abduction', format: signed('Add', 'Abd'), ticks: ['Abd 10°', '95°', 'Abd 180°'] },
+		{ joint: 'rotation', label: 'Rotation', format: signed('ER', 'IR'), ticks: ['ER 30°', '', 'IR 70°'] },
 		{ joint: 'elevation', label: 'Girdle elev / dep', format: signed('Dep', 'Elev'), ticks: ['Dep 10°', '', 'Elev 35°'] },
 		{ joint: 'protraction', label: 'Girdle pro / retract', format: signed('Retract', 'Protract'), ticks: ['Retract 25°', '0°', 'Protract 25°'] }
 	],
@@ -57,7 +57,7 @@ export const shoulder: JointModule = {
 	},
 	// far-off arm positions hide the axilla and chest wall; return to the rest pose to identify
 	readablePose: (p) =>
-		armElevation(p) > 100 || p.flexion < -30 || Math.abs(p.rotation) > 45 || Math.abs(p.protraction) > 15
+		armElevation(p) > 100 || Math.abs(p.rotation) > 45 || Math.abs(p.protraction) > 15
 			? { flexion: 0, abduction: 10, rotation: 0, elevation: 0, protraction: 0 }
 			: null,
 	reference,

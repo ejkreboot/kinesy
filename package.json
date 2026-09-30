@@ -10,7 +10,8 @@
 		"build:artifact": "vite build --mode artifact",
 		"preview": "vite preview",
 		"check": "tsc --noEmit",
-		"validate": "tsx scripts/validate-deform.ts"
+		"validate": "tsx scripts/validate-deform.ts",
+		"route": "tsx scripts/route.ts"
 	},
 	"dependencies": {
 		"three": "^0.186.1"

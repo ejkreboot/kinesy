@@ -45,11 +45,14 @@ export const shoulderRig: RigDef = {
 		{ name: 'humerus', parent: 2, joints: ['flexion', 'abduction', 'rotation'], frame: 'root' }
 	],
 	joints: [
-		// meshes were captured in anatomical position, arm hanging about 10° from the side
-		{ id: 'flexion', axis: 'flexion', restAngle: 0, min: -60, max: 180, initial: 0 },
-		{ id: 'abduction', axis: 'abduction', restAngle: 10, min: -40, max: 180, initial: 10 },
-		// + internal, − external
-		{ id: 'rotation', axis: 'rotation', restAngle: 0, min: -90, max: 70, initial: 0 },
+		// meshes were captured in anatomical position, arm hanging about 10° from the side. Extension only to
+		// 10°: further back the muscles over the front of the joint are stretched past what the model holds
+		{ id: 'flexion', axis: 'flexion', restAngle: 0, min: -10, max: 180, initial: 0 },
+		// no further in than the hanging position: past it the arm goes into the chest (and the humeral head
+		// through the muscles over it)
+		{ id: 'abduction', axis: 'abduction', restAngle: 10, min: 10, max: 180, initial: 10 },
+		// + internal, − external (external only to 30°: further, the pectoralis tendon wound round the humerus)
+		{ id: 'rotation', axis: 'rotation', restAngle: 0, min: -30, max: 70, initial: 0 },
 		// shoulder girdle, measured at the sternoclavicular joint: + elevation, − depression
 		{ id: 'elevation', axis: 'elevation', restAngle: 0, min: -10, max: 35, initial: 0, coupled: (p) => CLAVICLE_SHARE * scapularUpwardRotation(p) },
 		// + protraction, − retraction

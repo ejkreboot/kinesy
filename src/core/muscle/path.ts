@@ -26,7 +26,7 @@ import { qMul, qRotate, qToMat3, type Quat, type Rigid, type Vec3 } from '../mat
 import type { Pose, Rig } from '../rig';
 import { isJoin, isPoint, type JointPaths, type MusclePathDef, type RimSurface, type WrapSurface } from './schema';
 import { resetContacts, resolveContacts, type ContactModel } from './strandContact';
-import { minimize1D, perpendicular, rimBlocked, rimPoint, rimRange, wrapCylinder, wrapEllipsoid, type Rim } from './wrap';
+import { minimize1D, perpendicular, rimBlocked, rimPoint, rimRange, wrapCylinder, wrapEllipsoid, wrapEllipsoidAbout, type Rim } from './wrap';
 
 export interface PathOptions {
 	/**
@@ -64,13 +64,25 @@ function endDirections(X: Float64Array, N: number): [Vec3, Vec3] {
 	return [dir(0, k), dir(N - 1 - k, N - 1)];
 }
 
+/** Least share of the direction to a sheet strand's neighbour lying across it for that direction to set its roll. */
+const RUNG_ACROSS = 0.3;
+
+function smoothstep(a: number, b: number, x: number): number {
+	const u = Math.min(1, Math.max(0, (x - a) / (b - a)));
+	return u * u * (3 - 2 * u);
+}
+/** Least distance across a strand to its neighbour for that direction to set its roll (closer, near a shared tendon, it swings with the least change in how the strands arrive), mm. */
+const RUNG_MIN = 2;
+/** Share of a fan strand's widest spacing from its neighbour below which the direction to it isn't used for its roll. */
+const FAN_WIDE = 0.3;
+
 /** Gauss-Seidel sweeps over a run of consecutive wraps. */
 const RUN_SWEEPS = 3;
 
 interface Surface {
 	def: WrapSurface;
 	bone: number;
-	/** unit axis (cylinder) */
+	/** unit axis (cylinder; ellipsoid wrapped about one) */
 	axis: Vec3;
 	/** column-major local axes (ellipsoid; rim: u, v, normal) */
 	R: number[];
@@ -130,6 +142,13 @@ export class PathSolver {
 	readonly length: Float64Array;
 	readonly bulge: Float64Array;
 	readonly twistAngle: Float64Array;
+	/**
+	 * per strand, per sample: how far apart the samples are there, over the same at rest (1 at rest): a
+	 * shortening belly packs its samples closer, and the mesh along it packs with them (deform.ts)
+	 */
+	readonly spacing: Float64Array;
+	/** per strand: how much of its mesh's rest drape it keeps (1 at rest; MusclePathDef.drape) */
+	readonly drape: Float64Array;
 	/** bone transforms at the last solve, then one virtual bone per join (see joins) */
 	bones: Rigid[];
 	/** per strand: whether it ends on another muscle's strand (solved after the others) */
@@ -151,6 +170,17 @@ export class PathSolver {
 	private readonly anchors: number[][];
 	/** frames at rest, where each solve's walk starts (contact reads the previous step's) */
 	private readonly restQuat: Float64Array;
+	/** each sample's gap to its neighbours at rest (null while the rest pose is being set up) */
+	private restGaps: Float64Array | null = null;
+	/** per draped strand: its end-to-end direction at rest, in its origin bone's frame */
+	private readonly restChord: (Vec3 | null)[] = [];
+	/**
+	 * sheets (muscles with several strands): per strand, per sample, the direction to the neighbouring
+	 * strand as an angle round the strand in its frame at rest (NaN: none, or not yet set; see rollSheets)
+	 */
+	private restRung: Float64Array;
+	/** per strand, per sample: the sample whose roll it takes (fixed at rest; -1: none) */
+	private rungAt: Int32Array;
 
 	constructor(paths: JointPaths, rig: Rig, boneNames: string[], opts: Partial<PathOptions> = {}) {
 		this.opts = { ...DEFAULT_PATH_OPTIONS, ...opts };
@@ -166,7 +196,7 @@ export class PathSolver {
 		const surfaceIndex = new Map<string, number>();
 		for (const [name, s] of Object.entries(paths.surfaces)) {
 			surfaceIndex.set(name, this.surfaces.length);
-			const axis = s.kind === 'cylinder' ? unit(s.axis) : ([0, 0, 1] as Vec3);
+			const axis = s.kind === 'cylinder' ? unit(s.axis) : s.kind === 'ellipsoid' && s.about ? unit(s.about) : ([0, 0, 1] as Vec3);
 			let R = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 			if ((s.kind === 'ellipsoid' && s.axes) || s.kind === 'rim') {
 				const x = unit(s.axes![0]), y0 = s.axes![1];
@@ -218,6 +248,10 @@ export class PathSolver {
 		this.length = new Float64Array(S);
 		this.bulge = new Float64Array(S).fill(1);
 		this.twistAngle = new Float64Array(S);
+		this.spacing = new Float64Array(S * N).fill(1);
+		this.drape = new Float64Array(S).fill(1);
+		this.restRung = new Float64Array(S * N).fill(NaN);
+		this.rungAt = new Int32Array(S * N);
 		this.work = { poly: [], X: new Float64Array(N * 3), T: new Float64Array(N * 3), Rn: new Float64Array(N * 3), via: [] };
 		this.anchors = this.strands.map(() => [0, N - 1]);
 		this.walk = { r0: new Float64Array(S * 3), t0: new Float64Array(S * 3), rE: new Float64Array(S * 3), tE: new Float64Array(S * 3) };
@@ -265,6 +299,9 @@ export class PathSolver {
 		}
 		if (this.joins.length) this.solve(this.restPose);
 		this.restQuat = this.quat.slice();
+		this.restGaps = this.gaps();
+		this.restRung = this.rungAngles();
+		this.drapes();
 	}
 
 	/** Point and frame of strand s at `sigma` (samples) at the last solve or step. */
@@ -303,7 +340,13 @@ export class PathSolver {
 	 */
 	setContact(model: ContactModel | null): void {
 		this.contact = model;
+		this.restGaps = null;
+		this.restRung.fill(NaN);
 		this.solve(this.restPose);
+		this.restGaps = this.gaps();
+		this.restChord.length = 0;
+		this.drapes();
+		this.restRung = this.rungAngles();
 	}
 
 	/** Solve every strand for a (clamped) pose. */
@@ -326,6 +369,7 @@ export class PathSolver {
 			for (let s = 0; s < S; s++) if (!this.joined[s]) this.sample(this.strands[s], bones, s);
 			if (this.contact) resolveContacts(this, this.contact, bones, this.anchors);
 			for (let s = 0; s < S; s++) if (!this.joined[s]) this.strandFrames(this.strands[s], bones, s);
+			this.rollSheets();
 			// virtual bones: each join carried by its strand's motion since rest (identity at rest)
 			for (const j of this.joins) {
 				if (j.sigma < 0) {
@@ -343,24 +387,149 @@ export class PathSolver {
 			const e = this.muscles[m];
 			for (let s = e.first; s < e.first + e.count; s++) this.bulge[s] = this.bulgeFor(e, s - e.first);
 		}
+		if (this.restGaps) {
+			const g = this.gaps();
+			for (let k = 0; k < g.length; k++) this.spacing[k] = g[k] / this.restGaps[k];
+			this.drapes();
+		}
+	}
+
+	/**
+	 * A fan's strands (MusclePathDef.fan) each carry their own frame, and a big movement (the anterior
+	 * deltoid swung up in abduction) rolls them away from the plane the fan spans: the cross-section, laid
+	 * across it at rest, turned with them and arched off the bone it lies on. So each strand's frame is
+	 * rolled about its tangent until the fan's width direction (first strand to last) has the angle it had
+	 * at rest: the fan's own plane sets the roll, whatever the twist. The whole roll is always taken (it is
+	 * only defined up to whole turns, which don't matter then), so the frame is as continuous as that
+	 * direction. Where the neighbour lies (almost) along the strand, as at the tendon the fan converges on,
+	 * the direction at the nearest sample where it doesn't (chosen at rest) is used. Strands that pass
+	 * each other would flip it: fans only.
+	 */
+	private rollSheets(): void {
+		const N = this.N, Q = this.quat;
+		for (const m of this.muscles) {
+			if (m.count < 2 || !m.def.fan) continue;
+			for (let k = 0; k < m.count; k++) {
+				const s = m.first + k;
+				if (this.joined[s]) continue;
+				// the roll each usable sample needs, as far as the fan is still wide enough there now to say (where
+				// its edges brush past each other it fades out, and in again as they part); the others take their
+				// nearest usable sample's
+				const need = new Float64Array(N).fill(NaN);
+				for (let i = 0; i < N; i++) {
+					if (this.rungAt[s * N + i] !== i) continue;
+					const g = this.rungAngle(m, k, i);
+					need[i] = wrapPi(g.angle - this.restRung[s * N + i]) * smoothstep(RUNG_MIN, 3 * RUNG_MIN, g.across);
+				}
+				for (let i = 0; i < N; i++) {
+					const j = this.rungAt[s * N + i];
+					if (j < 0 || Number.isNaN(need[j])) continue;
+					const r = need[j];
+					// rotate the frame about its own tangent (its first axis) by r
+					const o = (s * N + i) * 4, h = r / 2, c = Math.cos(h), sn = Math.sin(h);
+					const [x, y, z, ww] = [Q[o], Q[o + 1], Q[o + 2], Q[o + 3]];
+					Q[o] = ww * sn + x * c; Q[o + 1] = y * c + z * sn; Q[o + 2] = z * c - y * sn; Q[o + 3] = ww * c - x * sn;
+				}
+			}
+		}
+	}
+
+	/**
+	 * Angle round strand k of muscle m at sample i (in its frame) of the fan's width direction (taken at
+	 * sample `at`), how wide the fan is across the strand, and what share of that direction is across it.
+	 */
+	private rungAngle(m: MuscleEntry, k: number, i: number, at = i): { angle: number; across: number; fraction: number } {
+		// the fan's width there: from its first strand to its last (two neighbours can run together, as the
+		// anterior deltoid's do over the head in abduction; its edges don't)
+		const N = this.N, P = this.pos, s = m.first + k, first = m.first, last = m.first + m.count - 1;
+		const a = (first * N + at) * 3, b = (last * N + at) * 3, o = (s * N + i) * 4;
+		const r = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]];
+		const q: Quat = [this.quat[o], this.quat[o + 1], this.quat[o + 2], this.quat[o + 3]];
+		const t = qRotate(q, [1, 0, 0]), y = qRotate(q, [0, 1, 0]), z = qRotate(q, [0, 0, 1]);
+		const rt = dot(r, t), rp = [r[0] - rt * t[0], r[1] - rt * t[1], r[2] - rt * t[2]];
+		const across = Math.hypot(rp[0], rp[1], rp[2]);
+		// where the strands (nearly) meet in a shared tendon the direction is unstable: none counts across
+		return { angle: Math.atan2(dot(rp, z), dot(rp, y)), across, fraction: across < RUNG_MIN ? 0 : across / Math.hypot(r[0], r[1], r[2]) };
+	}
+
+	/**
+	 * Rest rung angles of every fan strand's usable samples (NaN elsewhere), and for every sample the
+	 * usable one whose roll it takes (rungAt; -1 for none): itself, or the nearest, so toward the tendon a
+	 * fan converges on, where the direction between strands swings with the least change in how they
+	 * arrive (they may even pass there), the roll is held at what it was where the fan was still wide.
+	 */
+	private rungAngles(): Float64Array {
+		const N = this.N, out = new Float64Array(this.strands.length * N).fill(NaN);
+		this.rungAt.fill(-1);
+		for (const m of this.muscles) {
+			if (m.count < 2 || !m.def.fan) continue;
+			for (let k = 0; k < m.count; k++) {
+				const rungs = Array.from({ length: N }, (_, i) => this.rungAngle(m, k, i));
+				// usable: the neighbour well across the strand, and the fan still wide there
+				const wide = FAN_WIDE * Math.max(...rungs.map((r) => r.across));
+				const usable = rungs.map((r) => r.fraction >= RUNG_ACROSS && r.across >= wide);
+				for (let i = 0; i < N; i++) {
+					let j = -1;
+					for (let d = 0; d < N && j < 0; d++) {
+						if (i - d >= 0 && usable[i - d]) j = i - d;
+						else if (i + d < N && usable[i + d]) j = i + d;
+					}
+					this.rungAt[(m.first + k) * N + i] = j;
+					if (j === i) out[(m.first + k) * N + i] = rungs[i].angle;
+				}
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Each draped strand's share of its rest drape kept (MusclePathDef.drape): from 1 at rest down to the
+	 * muscle's share as its end-to-end direction, taken in its origin bone's frame, turns from its rest
+	 * direction by the muscle's angle.
+	 */
+	private drapes(): void {
+		const N = this.N, P = this.pos;
+		this.strands.forEach((st, s) => {
+			const d = this.muscles[st.muscle].def.drape;
+			if (!d) return;
+			const a = s * N * 3, b = (s * N + N - 1) * 3, q = this.bones[st.originBone].q;
+			const dir = unit(qRotate([-q[0], -q[1], -q[2], q[3]], [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]]));
+			if (!this.restChord[s]) this.restChord[s] = dir;
+			const turn = Math.acos(Math.min(1, Math.max(-1, dot(dir, this.restChord[s]!)))) * (180 / Math.PI);
+			this.drape[s] = 1 - (1 - d[0]) * smoothstep(0, d[1], turn);
+		});
+	}
+
+	/** Each sample's distance to its neighbours (half the span across it; one-sided at the ends). */
+	private gaps(): Float64Array {
+		const N = this.N, P = this.pos, out = new Float64Array(this.strands.length * N);
+		const dist = (a: number, b: number) => Math.hypot(P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]);
+		for (let s = 0; s < this.strands.length; s++)
+			for (let i = 0; i < N; i++) {
+				const o = (s * N + i) * 3;
+				out[s * N + i] = Math.max(1e-6, i === 0 ? dist(o, o + 3) : i === N - 1 ? dist(o - 3, o) : dist(o - 3, o + 3) / 2);
+			}
+		return out;
 	}
 
 	/**
 	 * Pack strands and bones into an RGBA float texture `width` texels wide. Row s < strands: texel
-	 * 2i = sample i's position and the strand's bulge factor, 2i+1 = its frame quaternion; texel 2N =
-	 * (origin bone, insertion bone). Last row: texel 2b = bone b's translation, 2b+1 = its rotation.
+	 * 2i = sample i's position and spacing, 2i+1 = its frame quaternion; texel 2N = (origin bone,
+	 * insertion bone, bulge factor, length), 2N+1 = (drape kept, 0, 0, 0). Last row: texel 2b = bone b's
+	 * translation, 2b+1 = its rotation.
 	 */
 	writeTexture(out: Float32Array, width: number): void {
 		const N = this.N, S = this.strands.length;
 		for (let s = 0; s < S; s++) {
-			const row = s * width * 4, k = this.bulge[s];
+			const row = s * width * 4;
 			for (let i = 0; i < N; i++) {
 				const o = row + i * 8, p = (s * N + i) * 3, q = (s * N + i) * 4;
-				out[o] = this.pos[p]; out[o + 1] = this.pos[p + 1]; out[o + 2] = this.pos[p + 2]; out[o + 3] = k;
+				out[o] = this.pos[p]; out[o + 1] = this.pos[p + 1]; out[o + 2] = this.pos[p + 2]; out[o + 3] = this.spacing[s * N + i];
 				out[o + 4] = this.quat[q]; out[o + 5] = this.quat[q + 1]; out[o + 6] = this.quat[q + 2]; out[o + 7] = this.quat[q + 3];
 			}
 			const m = row + N * 8, st = this.strands[s];
-			out[m] = st.originBone; out[m + 1] = st.insertionBone; out[m + 2] = 0; out[m + 3] = 0;
+			out[m] = st.originBone; out[m + 1] = st.insertionBone; out[m + 2] = this.bulge[s]; out[m + 3] = this.length[s];
+			out[m + 4] = this.drape[s]; out[m + 5] = 0; out[m + 6] = 0; out[m + 7] = 0;
 		}
 		const row = S * width * 4;
 		this.bones.forEach((b, i) => {
@@ -372,7 +541,7 @@ export class PathSolver {
 
 	/** Texture size for writeTexture: [width, height]. */
 	textureSize(): [number, number] {
-		return [Math.max(2 * this.N + 1, 2 * (this.boneCount + this.joins.length)), this.strands.length + 1];
+		return [Math.max(2 * this.N + 2, 2 * (this.boneCount + this.joins.length)), this.strands.length + 1];
 	}
 
 	/** World-space polyline of a strand before resampling (for debugging). */
@@ -449,12 +618,14 @@ export class PathSolver {
 		const raw = Math.atan2(dot(c, tN), dot(rN, target));
 		const phi = (this.twistAngle[s] += wrapPi(raw - this.twistAngle[s]));
 		const Q = this.quat;
+		// a fan's roll comes from the fan (rollSheets), not from its ends' twist
+		const fan = this.muscles[st.muscle].def.fan === true && this.muscles[st.muscle].count > 1;
 		let px = 0, py = 0, pz = 0, pw = 1;
 		for (let i = 0; i < N; i++) {
 			const o = i * 3;
 			const t: Vec3 = [T[o], T[o + 1], T[o + 2]];
 			let r: Vec3 = [Rn[o], Rn[o + 1], Rn[o + 2]];
-			const a = phi * st.twist[i];
+			const a = fan ? 0 : phi * st.twist[i];
 			if (a !== 0) {
 				const b = cross(t, r), ca = Math.cos(a), sa = Math.sin(a);
 				r = [r[0] * ca + b[0] * sa, r[1] * ca + b[1] * sa, r[2] * ca + b[2] * sa];
@@ -586,17 +757,17 @@ export class PathSolver {
 		const M = qToMat3(b.q), R = sf.R, Rw: number[] = new Array(9);
 		for (let col = 0; col < 3; col++)
 			for (let row = 0; row < 3; row++) Rw[col * 3 + row] = M[row] * R[col * 3] + M[3 + row] * R[col * 3 + 1] + M[6 + row] * R[col * 3 + 2];
-		return wrapEllipsoid(P, S, c, d.radii, Rw, out);
+		return d.about ? wrapEllipsoidAbout(P, S, c, d.radii, Rw, qRotate(b.q, sf.axis), e.side, out) : wrapEllipsoid(P, S, c, d.radii, Rw, out);
 	}
 
 	/**
-	 * Side of a cylinder the rest-pose path passes on. Where the rest path touches the cylinder, the
-	 * side with the shorter wrap; where it doesn't, counterclockwise (+1) when the axis lies to the
-	 * left of the straight line between the points around the wrap, seen down the axis.
+	 * Side of a cylinder (or an ellipsoid wrapped about an axis) the rest-pose path passes on. Where the
+	 * rest path touches it, the side with the shorter wrap; where it doesn't, counterclockwise (+1) when
+	 * the axis lies to the left of the straight line between the points around the wrap, seen down the axis.
 	 */
 	private autoSide(st: Strand, e: { surface: number }): number {
 		const sf = this.surfaces[e.surface];
-		if (sf.def.kind !== 'cylinder') return 1;
+		if (sf.def.kind !== 'cylinder' && !(sf.def.kind === 'ellipsoid' && sf.def.about)) return 1;
 		const els = st.elements, k = els.indexOf(e as Element);
 		let a = k - 1, b = k + 1;
 		while (!els[a].point) a--;

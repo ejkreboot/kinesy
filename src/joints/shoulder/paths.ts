@@ -15,6 +15,12 @@ export const shoulderPaths: JointPaths = {
 		humeralHeadCuff: { kind: 'ellipsoid', bone: 'humerus', center: [-1.6, 1.1, 0], radii: [26, 26, 26] },
 		// over the cuff, for the deltoid
 		humeralHeadDeltoid: { kind: 'ellipsoid', bone: 'humerus', center: [-1.6, 1.1, 0], radii: [36, 36, 36] },
+		// the head and cuff under the middle deltoid, seen from the scapula about the joint's centre of rotation:
+		// low under the acromion, whose edge its fan leaves from (inside the sphere, its strands dived out of it).
+		// Always round the lateral side, about the front-to-back axis: as the girdle rises with the arm hanging,
+		// the humerus adducts under the acromion until the fibres' ends lie opposite each other across the head,
+		// where the short way switched sides and cut straight through it
+		deltoidMid: { kind: 'ellipsoid', bone: 'scapula', center: [0, 0, 0], radii: [36, 28, 36], about: [0, 0, 1] },
 		// surgical neck and proximal shaft, long along the head→shaft axis: latissimus dorsi and teres
 		// major wind round it to their insertions on the lips of the intertubercular groove
 		humerusNeck: { kind: 'ellipsoid', bone: 'humerus', center: [-9, -23.8, 1.4], radii: [22, 62, 22], axes: [[-0.953, 0.301, 0], [-0.301, -0.952, 0.056]] },
@@ -91,6 +97,11 @@ export const shoulderPaths: JointPaths = {
 		{
 			mesh: 'deltoid_ant',
 			layer: 1,
+			// it lies curved round the front of the head at rest, 20-30 mm off the line from clavicle to humerus;
+			// as the arm rises it pulls in onto that line (kept, the curve arched the belly off the shoulder), and
+			// slides against the middle deltoid rather than into it
+			drape: [0, 60],
+			beside: ['deltoid_mid'],
 			strands: [[
 				{ bone: 'clavicle', p: [76, 30.6, 26.5] }, // lateral third of the clavicle
 				{ wrap: 'humeralHeadDeltoid' },
@@ -98,15 +109,22 @@ export const shoulderPaths: JointPaths = {
 				{ bone: 'humerus', p: [-38.5, -105.2, 5.3] } // deltoid tuberosity
 			]]
 		},
+		// the middle deltoid: a fan from along its origin (a single strand turned its whole cross-section with it,
+		// off the attachment line, when abduction swung the fibres up, and it crumpled against the acromion)
 		{
 			mesh: 'deltoid_mid',
 			layer: 1,
-			strands: [[
-				{ bone: 'scapula', p: [-1.9, 28.4, -13.9] }, // acromion
-				{ wrap: 'humeralHeadDeltoid' },
-				{ bone: 'humerus', p: [-51.8, -67.3, 1] },
-				{ bone: 'humerus', p: [-40.4, -106.8, 0.6] } // deltoid tuberosity
-			]]
+			fan: true,
+			// only the attachment line holds: the belly lying on the bone below it at rest peels off and swings
+			// up with the fibres in abduction (held, it stayed hanging and the sheet folded over it)
+			anchor: [2, 8],
+			// lateral edge of the acromion, back to front; converging on the deltoid tuberosity (by way of a
+			// point off its fleshy insertion, the fan swung round the head in rotation)
+			strands: [
+				[{ bone: 'scapula', p: [-4.4, 26.9, -27.8] }, { wrap: 'deltoidMid' }, { bone: 'humerus', p: [-35.8, -82.3, 3.4] }],
+				[{ bone: 'scapula', p: [-3.6, 28.6, -13.5] }, { wrap: 'deltoidMid' }, { bone: 'humerus', p: [-35.8, -82.3, 3.4] }],
+				[{ bone: 'scapula', p: [2, 29.7, -1.2] }, { wrap: 'deltoidMid' }, { bone: 'humerus', p: [-35.8, -82.3, 3.4] }]
+			]
 		},
 		{
 			mesh: 'deltoid_post',
@@ -171,6 +189,9 @@ export const shoulderPaths: JointPaths = {
 		{
 			mesh: 'pec_clav',
 			layer: 2,
+			// its frames rolled to the sheet's own plane: carried along the strands, the sheet twisted into a rope
+			// as the arm rose and the fibres swung up over the joint
+			fan: true,
 			// medial half of the clavicle; the lowest part of the insertion (lateral lip of the intertubercular groove)
 			strands: [
 				[{ bone: 'humerus', p: [-21.9, -46.4, 11.3] }, { bone: 'clavicle', p: [80.8, 24.8, 44.7] }],

@@ -197,6 +197,58 @@ export function wrapEllipsoid(P: Vec3, S: Vec3, c: Vec3, radii: Vec3, R: number[
 }
 
 /**
+ * Wrap P → S over the ellipsoid (as wrapEllipsoid) the way a cylinder with axis `a` (world) is wrapped:
+ * counterclockwise about it for side +1, clockwise for -1, the long way round where the ends pass the
+ * center, and only while the straight line crosses the ellipsoid on that side, lifting off where the
+ * tangent points meet. On the unit sphere the ellipsoid maps to, the path runs in the plane through the
+ * straight line whose normal lies nearest the axis: round a small circle rather than a great one, but
+ * defined wherever the line doesn't run along the axis, so ends lying opposite each other across the
+ * center, where the short way switches sides, are nothing special.
+ */
+export function wrapEllipsoidAbout(P: Vec3, S: Vec3, c: Vec3, radii: Vec3, R: number[], a: Vec3, side: number, out: number[]): boolean {
+	const toUnit = (X: Vec3): Vec3 => {
+		const x = X[0] - c[0], y = X[1] - c[1], z = X[2] - c[2];
+		return [(R[0] * x + R[1] * y + R[2] * z) / radii[0], (R[3] * x + R[4] * y + R[5] * z) / radii[1], (R[6] * x + R[7] * y + R[8] * z) / radii[2]];
+	};
+	const p = toUnit(P), s = toUnit(S);
+	// the axis on the unit sphere: normal to the planes it turns in, which map with the inverse transpose
+	const ar = [(R[0] * a[0] + R[1] * a[1] + R[2] * a[2]) * radii[0], (R[3] * a[0] + R[4] * a[1] + R[5] * a[2]) * radii[1], (R[6] * a[0] + R[7] * a[1] + R[8] * a[2]) * radii[2]];
+	const l = [s[0] - p[0], s[1] - p[1], s[2] - p[2]], ll = Math.hypot(l[0], l[1], l[2]);
+	if (ll < 1e-9) return false;
+	// the plane through the line nearest square to the axis; a line along the axis has none
+	const al = (ar[0] * l[0] + ar[1] * l[1] + ar[2] * l[2]) / (ll * ll);
+	let n = [ar[0] - al * l[0], ar[1] - al * l[1], ar[2] - al * l[2]];
+	const nl = Math.hypot(n[0], n[1], n[2]);
+	if (nl < 1e-6 * Math.hypot(ar[0], ar[1], ar[2])) return false;
+	n = [(side * n[0]) / nl, (side * n[1]) / nl, (side * n[2]) / nl];
+	// its circle on the sphere
+	const dn = p[0] * n[0] + p[1] * n[1] + p[2] * n[2];
+	if (Math.abs(dn) >= 1) return false;
+	const rho = Math.sqrt(1 - dn * dn), o = [dn * n[0], dn * n[1], dn * n[2]];
+	const e1 = [l[0] / ll, l[1] / ll, l[2] / ll], e2 = [n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]];
+	const px = (p[0] - o[0]) * e1[0] + (p[1] - o[1]) * e1[1] + (p[2] - o[2]) * e1[2], py = (p[0] - o[0]) * e2[0] + (p[1] - o[1]) * e2[1] + (p[2] - o[2]) * e2[2];
+	const sx = px + ll, sy = py;
+	const at = (x: number, y: number) => {
+		const u = [(o[0] + x * e1[0] + y * e2[0]) * radii[0], (o[1] + x * e1[1] + y * e2[1]) * radii[1], (o[2] + x * e1[2] + y * e2[2]) * radii[2]];
+		out.push(c[0] + R[0] * u[0] + R[3] * u[1] + R[6] * u[2], c[1] + R[1] * u[0] + R[4] * u[1] + R[7] * u[2], c[2] + R[2] * u[0] + R[5] * u[1] + R[8] * u[2]);
+	};
+	// endpoints inside: a dive from the surface, wrapped or not (see wrapCylinder)
+	const rOut = rho * 1.001, dp = Math.hypot(px, py), ds = Math.hypot(sx, sy);
+	const pIn = dp < rOut && dp > 1e-9, sIn = ds < rOut && ds > 1e-9;
+	const w = circleWrap(px, py, sx, sy, rho);
+	if (pIn) at((px * rOut) / dp, (py * rOut) / dp);
+	if (w) {
+		const m = arcSteps(w.dth);
+		for (let k = 0; k <= m; k++) {
+			const th = w.th0 + (w.dth * k) / m;
+			at(rho * Math.cos(th), rho * Math.sin(th));
+		}
+	}
+	if (sIn) at((sx * rOut) / ds, (sy * rOut) / ds);
+	return !!w || pIn || sIn;
+}
+
+/**
  * A rim in world space: centre, in-plane unit axes u and v, plate normal n = u × v, semi-axes a and b,
  * and the arc a path may pass over (radians from u toward v, from < to), null for the whole rim.
  */

@@ -54,6 +54,14 @@ export interface EllipsoidSurface {
 	radii: Vec3;
 	/** local x and y axes (z = x × y); world axes if left out */
 	axes?: [Vec3, Vec3];
+	/**
+	 * wrap it the way a cylinder with this axis is wrapped (bone frame): always round one side, set by the
+	 * use's `side` as for cylinders, taking the long way where the ends pass the centre, rather than the short
+	 * way, which has no side to take where the ends lie opposite each other across it (the middle deltoid
+	 * over the humeral head as the girdle rises with the arm hanging). The path runs in the plane through
+	 * its straight line whose normal lies nearest the axis (wrap.ts, wrapEllipsoidAbout).
+	 */
+	about?: Vec3;
 }
 
 /**
@@ -80,7 +88,8 @@ export type WrapSurface = CylinderSurface | EllipsoidSurface | RimSurface;
  * the point before to the point after, -1 clockwise. Left out, it is the side the rest-pose path
  * passes on, so the path never swaps sides as the joint moves. A wrap is taken only while the
  * straight line would cross the surface on that side; it lifts off where the two tangent points
- * meet, so there is no jump. Ellipsoids wrap the short way round and ignore `side`.
+ * meet, so there is no jump. Ellipsoids wrap the short way round and ignore `side`, unless they have
+ * an axis to go `about`: then `side` is about it, as for a cylinder.
  *
  * Rims: `arc` is the part of the rim this path may pass over, [from, to] in degrees from the first
  * axis toward the second. Beyond its ends the plate's plane is closed as well (a wall running out from
@@ -113,6 +122,28 @@ export interface MusclePathDef {
 	 * Muscles in one layer don't meet.
 	 */
 	layer: number;
+	/**
+	 * the strands fan out from one tendon (or converge on one) without passing each other: their frames
+	 * are rolled to the fan's plane (path.ts, rollSheets), so its cross-section stays laid across the fan
+	 * however far the fan swings; default false
+	 */
+	fan?: boolean;
+	/**
+	 * [share, degrees]: how far the belly's rest drape relaxes onto the line of action. At rest a belly
+	 * lying over a round bone (the anterior deltoid over the humeral head) sits well off the straight line
+	 * between its ends; bound as it is, it kept that offset whatever the strand did, and arched off the
+	 * shoulder once the arm rose. With this, the offset shrinks to `share` of itself as the strand turns
+	 * from its rest direction (relative to its origin bone) by `degrees`, so the belly pulls in along its
+	 * line of action as a contracting muscle does. Default: none.
+	 */
+	drape?: [number, number];
+	/**
+	 * meshes in this muscle's layer lying beside it (the deltoid's parts, edge to edge) that its strands are
+	 * kept apart from as strands of different layers are (strandContact.ts), each on the side it lay at rest,
+	 * so a part pulling in along its line of action slides against the next rather than into it. On even
+	 * where the joint turns contact off.
+	 */
+	beside?: string[];
 	/** bones the mesh is kept outside of (at most 4); default: every bone with a distance field */
 	collide?: string[];
 	/** mesh whose path length sets this one's bulge (a head that ends at a shared tendon) */
@@ -144,7 +175,10 @@ export interface JointPaths {
 	 * vertices from one to the next
 	 */
 	collidePasses?: number;
-	/** false turns contact between strands of different layers off for the joint (strandContact.ts) */
+	/**
+	 * false turns contact between strands of different layers off for the joint (strandContact.ts); the
+	 * pairs muscles name as `beside` keep theirs
+	 */
 	contact?: false;
 }
 

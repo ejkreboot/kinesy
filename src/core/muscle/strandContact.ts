@@ -49,11 +49,13 @@ export interface ContactOptions {
 	sweeps: number;
 	/** keep strands out of bone as well (BoneContacts); experimental, off by default */
 	bones: boolean;
+	/** contact between every pair of layers; false leaves only the pairs muscles name as `beside` */
+	layers: boolean;
 }
 
 // reach 9 mm and beyond takes in strands that only meet in the flexed elbow's crease, where the side
 // between them turns too fast to follow
-export const DEFAULT_CONTACT_OPTIONS: ContactOptions = { reach: 6, soft: 0.5, sweeps: 3, bones: false };
+export const DEFAULT_CONTACT_OPTIONS: ContactOptions = { reach: 6, soft: 0.5, sweeps: 3, bones: false, layers: true };
 
 /** The contacts between one upper strand and one lower strand. */
 export interface StrandContact {
@@ -69,6 +71,11 @@ export interface StrandContact {
 	n: Float64Array;
 	/** overlap of the two meshes at rest along the side (≤ 0), mm */
 	base: Float64Array;
+	/**
+	 * the lower strand holds its line and the upper takes the whole push: a part beside another gives way to
+	 * it (pushed, the middle deltoid's fan strands rolled its sheet over)
+	 */
+	held: boolean;
 }
 
 /** Samples of strands kept out of bones: one row per (strand, sample, bone). */
@@ -121,8 +128,9 @@ const SIDE_TRUST = 3;
 export const EXT_DIRS = 16;
 
 /**
- * Contacts for every pair of strands in different layers, from the rest pose (the solver must be
- * at rest) and the bound meshes.
+ * Contacts for every pair of strands in different layers, and of muscles named `beside` one another
+ * (the one naming the other takes the upper part), from the rest pose (the solver must be at rest) and
+ * the bound meshes.
  */
 export function buildContactModel(solver: PathSolver, bound: BoundMesh[], fields: (SdfGrid | null)[], opts: Partial<ContactOptions> = {}): ContactModel {
 	const o = { ...DEFAULT_CONTACT_OPTIONS, ...opts };
@@ -144,7 +152,8 @@ export function buildContactModel(solver: PathSolver, bound: BoundMesh[], fields
 	const c = [0, 0, 0], q = [0, 0, 0, 1], t = [0, 0, 0], cu = [0, 0, 0], qu = [0, 0, 0, 1];
 	for (const U of solver.muscles)
 		for (const L of solver.muscles) {
-			if (L.def.layer >= U.def.layer) continue;
+			const beside = !!U.def.beside?.includes(L.def.mesh);
+			if (!beside && (!o.layers || L.def.layer >= U.def.layer)) continue;
 			for (let u = U.first; u < U.first + U.count; u++)
 				for (let l = L.first; l < L.first + L.count; l++) {
 					const eu = ext[u], el = ext[l];
@@ -169,8 +178,9 @@ export function buildContactModel(solver: PathSolver, bound: BoundMesh[], fields
 						const vp = [v[0] - vt * t[0], v[1] - vt * t[1], v[2] - vt * t[2]], r = Math.hypot(vp[0], vp[1], vp[2]);
 						if (r < MIN_REST) continue;
 						const n = [vp[0] / r, vp[1] / r, vp[2] / r];
-						// muscles only meet where nothing solid lies between them
-						if (boneBetween(fields, x, y, z, c)) continue;
+						// muscles only meet where nothing solid lies between them; parts lying beside one another round a
+						// bone (the deltoid's round the humeral head) meet across the line between their strands, which cuts it
+						if (!beside && boneBetween(fields, x, y, z, c)) continue;
 						strandFrame(solver, u, i / (N - 1), cu, qu);
 						const thick = extentAt(el, sigma, q, n[0], n[1], n[2]) + extentAt(eu, i, qu, -n[0], -n[1], -n[2]);
 						if (r > thick + o.reach) continue;
@@ -182,7 +192,7 @@ export function buildContactModel(solver: PathSolver, bound: BoundMesh[], fields
 					const sigma0 = Float64Array.from(rows, (r) => r.sigma);
 					contacts.push({
 						upper: u, lower: l, i: Int32Array.from(rows, (r) => r.i), sigma0, sigma: sigma0.slice(), n0, n: n0.slice(),
-						base: Float64Array.from(rows, (r) => r.base)
+						base: Float64Array.from(rows, (r) => r.base), held: beside
 					});
 				}
 		}
@@ -305,12 +315,12 @@ export function resolveContacts(solver: PathSolver, m: ContactModel, bones: Rigi
 				// shared by how freely each strand gives there, toward bone only as far as it has room
 				const au = anchors[u], al = anchors[l], hu = solver.length[u] / (N - 1), hl = solver.length[l] / (N - 1);
 				const gu = give(m, bones, u, i, x, y, z, n, 1), gl = give(m, bones, l, sigma, cBuf[0], cBuf[1], cBuf[2], n, -1);
-				const cu = compliance(au, i) * hu * gu, cl = compliance(al, sigma) * hl * gl;
+				const cu = compliance(au, i) * hu * gu, cl = ct.held ? 0 : compliance(al, sigma) * hl * gl;
 				if (cu + cl <= 1e-9) continue;
 				// each within its bend limit (all pushes this step together); what one can't take goes to the
 				// other, as far as it can
 				const maxU = Math.max(0, BEND * span(au, i) * hu * gu - pushed(u, i, n, 1));
-				const maxL = Math.max(0, BEND * span(al, sigma) * hl * gl - pushed(l, sigma, n, -1));
+				const maxL = ct.held ? 0 : Math.max(0, BEND * span(al, sigma) * hl * gl - pushed(l, sigma, n, -1));
 				let up = (gap * cu) / (cu + cl), low = gap - up;
 				if (up > maxU) { low = Math.min(maxL, low + up - maxU); up = maxU; }
 				else if (low > maxL) { up = Math.min(maxU, up + low - maxL); low = maxL; }

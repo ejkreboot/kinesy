@@ -22,7 +22,7 @@ import type { Quat } from '../math';
 import { qRotate } from '../math';
 import { sdfSample, SDF_FAR } from '../sdf';
 import type { IndexArray, SdfGrid } from '../types';
-import { blendedFrame, capsuleDistance, type CapsuleArray } from './deform';
+import { blendedFrame, capsuleDistance, vertexFrame, type CapsuleArray } from './deform';
 import type { PathSolver } from './path';
 
 export interface BoundMesh {
@@ -44,6 +44,13 @@ export interface BoundMesh {
 	weights: Float32Array;
 	/** per vertex: rest clearance from each collider bone (mm; SDF_FAR where none) */
 	clear: Float32Array;
+	/** per vertex: half-width of the window along the strand its frame is averaged over, mm (deform.ts) */
+	window: Float32Array;
+	/**
+	 * per vertex: its part of the belly's rest drape, in the frame (MusclePathDef.drape): the mesh's median
+	 * offset across the strand there; zero for muscles without a drape
+	 */
+	drape: Float32Array;
 	/** collider bones, -1 for unused slots */
 	colliders: [number, number, number, number];
 	/** cross-section profile along the strands (N samples, 1 = widest) */
@@ -154,7 +161,7 @@ export function bindMesh(
 	}
 
 	const path = new Float32Array(nv * 4), offset = new Float32Array(nv * 3), normal = new Float32Array(nv * 3);
-	const weights = new Float32Array(nv * 4), clear = new Float32Array(nv * 4);
+	const weights = new Float32Array(nv * 4), clear = new Float32Array(nv * 4), window = new Float32Array(nv);
 	const restN = vertexNormals(rest, index, nv);
 	const c = [0, 0, 0], q = [0, 0, 0, 1];
 	for (let v = 0; v < nv; v++) {
@@ -163,9 +170,14 @@ export function bindMesh(
 		const j = Math.min(Math.max(0, K - 2), Math.floor(w)), beta = K > 1 ? w - j : 0;
 		const a = m.first + j, b = K > 1 ? a + 1 : a;
 		path.set([s, beta, a, b], v * 4);
-		blendedFrame(solver, a, b, s, beta, c, q);
-		const qi: Quat = [-q[0], -q[1], -q[2], q[3]];
 		const o3 = v * 3;
+		// the window follows from the vertex's distance from the strand, and the offset is kept in the
+		// frame averaged over it (so the rest pose is rebuilt exactly)
+		blendedFrame(solver, a, b, s, beta, c, q);
+		const across = qRotate([-q[0], -q[1], -q[2], q[3]], [rest[o3] - c[0], rest[o3 + 1] - c[1], rest[o3 + 2] - c[2]]);
+		window[v] = Math.min(BEND_WINDOW * Math.hypot(across[1], across[2]), WINDOW_SHARE * solver.strands[a].restLength);
+		vertexFrame(solver, a, b, s, beta, window[v], c, q);
+		const qi: Quat = [-q[0], -q[1], -q[2], q[3]];
 		offset.set(qRotate(qi, [rest[o3] - c[0], rest[o3 + 1] - c[1], rest[o3 + 2] - c[2]]), o3);
 		normal.set(qRotate(qi, [restN[o3], restN[o3 + 1], restN[o3 + 2]]), o3);
 	}
@@ -202,11 +214,20 @@ export function bindMesh(
 	const L0 = solver.strands[m.first].restLength;
 	const [anchorO, anchorI] = (def.anchor ?? [8, 8]).map((mm) => mm / L0);
 	const smooth = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+	// the part of an end that lies on its bone rides it; a thick belly's surface further out pivots with
+	// the strand about the attachment instead (held to the bone, it kept pointing the way it hung at rest
+	// while the strand turned, and the two folded over each other)
+	const near = (bone: number, v: number) => {
+		const g = bone < fields.length ? fields[bone] : null;
+		if (!g) return 1;
+		const d = sdfSample(g, rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2]);
+		return 1 - smoothstep(ANCHOR_NEAR[0], ANCHOR_NEAR[1], d);
+	};
 	for (let v = 0; v < nv; v++) {
-		const s = path[v * 4], f = s * (N - 1), i = Math.min(N - 2, Math.floor(f)), u = f - i;
+		const s = path[v * 4], f = s * (N - 1), i = Math.min(N - 2, Math.floor(f)), u = f - i, st = solver.strands[path[v * 4 + 2]];
 		weights[v * 4] = profile[i] + (profile[i + 1] - profile[i]) * u;
-		weights[v * 4 + 1] = anchorO > 0 ? 1 - smooth(s / anchorO) : 0;
-		weights[v * 4 + 2] = anchorI > 0 ? 1 - smooth((1 - s) / anchorI) : 0;
+		weights[v * 4 + 1] = anchorO > 0 ? (1 - smooth(s / anchorO)) * near(st.originBone, v) : 0;
+		weights[v * 4 + 2] = anchorI > 0 ? (1 - smooth((1 - s) / anchorI)) * near(st.insertionBone, v) : 0;
 		weights[v * 4 + 3] = SDF_FAR;
 	}
 	if (def.attach !== false) {
@@ -252,7 +273,62 @@ export function bindMesh(
 			clear[v * 4 + k] = g ? sdfSample(g, rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2]) : SDF_FAR;
 		}
 
-	return { name, muscle: mi, nv, layer: def.layer, caps: 0, path, offset, normal, weights, clear, colliders, profile };
+	const drape = new Float32Array(nv * 3);
+	if (def.drape) restDrape(path, offset, nv, drape);
+
+	return { name, muscle: mi, nv, layer: def.layer, caps: 0, path, offset, normal, weights, clear, colliders, profile, window, drape };
+}
+
+/**
+ * Half-width of a vertex's frame window per mm of its distance from the strand: at a bend the frame a
+ * vertex sees is averaged over a stretch about as long as it is far out, so the bend it follows is
+ * rounded to about that radius and its side of the muscle doesn't fold over on the inside of the bend.
+ */
+const BEND_WINDOW = 1;
+/** Widest a frame window may be, as a share of the strand's rest length (a short muscle is all bend otherwise). */
+const WINDOW_SHARE = 0.15;
+
+/** Slices along a strand the rest drape is measured in, and smoothing passes over them. */
+const DRAPE_BINS = 24, DRAPE_SMOOTH = 3;
+
+/**
+ * The belly's rest drape (into `out`, per vertex, in the frame): per strand (pair) and slice along it,
+ * the median offset of its vertices across the strand, smoothed from slice to slice and interpolated to
+ * each vertex's place along it.
+ */
+function restDrape(path: Float32Array, offset: Float32Array, nv: number, out: Float32Array): void {
+	const groups = new Map<number, number[][][]>();
+	for (let v = 0; v < nv; v++) {
+		const a = path[v * 4 + 2], k = Math.min(DRAPE_BINS - 1, Math.floor(path[v * 4] * DRAPE_BINS));
+		const g = groups.get(a) ?? groups.set(a, Array.from({ length: DRAPE_BINS }, () => [])).get(a)!;
+		g[k].push([offset[v * 3 + 1], offset[v * 3 + 2]]);
+	}
+	const med = (x: number[]) => { const y = [...x].sort((p, q) => p - q); return y.length ? y[y.length >> 1] : 0; };
+	const table = new Map<number, Float64Array>();
+	for (const [a, g] of groups) {
+		let t = new Float64Array(DRAPE_BINS * 2);
+		g.forEach((vs, k) => { t[k * 2] = med(vs.map((o) => o[0])); t[k * 2 + 1] = med(vs.map((o) => o[1])); });
+		for (let it = 0; it < DRAPE_SMOOTH; it++) {
+			const c = t.slice();
+			for (let k = 0; k < DRAPE_BINS; k++) for (let j = 0; j < 2; j++) t[k * 2 + j] = 0.5 * c[k * 2 + j] + 0.25 * (c[Math.max(0, k - 1) * 2 + j] + c[Math.min(DRAPE_BINS - 1, k + 1) * 2 + j]);
+			t = t.slice();
+		}
+		table.set(a, t);
+	}
+	for (let v = 0; v < nv; v++) {
+		const t = table.get(path[v * 4 + 2])!, f = Math.min(DRAPE_BINS - 1, Math.max(0, path[v * 4] * DRAPE_BINS - 0.5));
+		const k = Math.min(DRAPE_BINS - 2, Math.floor(f)), u = f - k;
+		out[v * 3 + 1] = t[k * 2] + (t[(k + 1) * 2] - t[k * 2]) * u;
+		out[v * 3 + 2] = t[k * 2 + 1] + (t[(k + 1) * 2 + 1] - t[k * 2 + 1]) * u;
+	}
+}
+
+/** Rest clearance from its end's bone within which a vertex near that end rides it (fully, not at all), mm. */
+const ANCHOR_NEAR: [number, number] = [3, 12];
+
+function smoothstep(a: number, b: number, x: number): number {
+	const u = Math.min(1, Math.max(0, (x - a) / (b - a)));
+	return u * u * (3 - 2 * u);
 }
 
 /** Rest clearance from a bone within which a vertex is attached to it (fully, not at all), mm. */

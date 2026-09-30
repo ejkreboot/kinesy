@@ -3,9 +3,14 @@
  * steps on the GPU every frame; this copy exists for validation, tests, and tools, and must be
  * kept in step with it:
  *
- *   1. frame at the vertex's (s, strand pair, blend): positions lerped, quaternions nlerped;
- *   2. cross-section scaled by 1 + (k − 1)·belly, k the strand's bulge factor;
- *   3. position = center + frame · offset; normal = frame · (rest normal under the same scale);
+ *   1. frame at the vertex's (s, strand pair, blend): positions lerped, quaternions nlerped, each
+ *      averaged over a window along the strand as wide as the vertex is far from it (vertexFrame), so
+ *      the thick part of a muscle sees a sharp bend rounded and its inner side doesn't fold over;
+ *   2. cross-section scaled by 1 + (k − 1)·belly, k the strand's bulge factor; the offset along the
+ *      strand scaled by the samples' spacing there (1 at rest), so a shortening belly packs its mesh
+ *      as closely as its samples instead of folding the slices over each other;
+ *   3. position = center + frame · offset (less the part of the rest drape the strand has let go, see
+ *      MusclePathDef.drape); normal = frame · (rest normal under the same scale);
  *   4. near each end, blend toward riding the attachment bone rigidly;
  *   5. kept out of bone distance fields (and, if on, the capsules of muscles in lower layers), only
  *      as far as the vertex is deeper than it sat at rest: back to the surface along the nearest way
@@ -104,6 +109,59 @@ export function strandFrame(solver: PathSolver, strand: number, s: number, c: Fl
 	return solver.bulge[strand];
 }
 
+/** Spacing of strand's samples at arc-length share s, over the same at rest (PathSolver.spacing). */
+export function strandSpacing(solver: PathSolver, strand: number, s: number): number {
+	const N = solver.N, f = Math.min(1, Math.max(0, s)) * (N - 1);
+	const i = Math.min(N - 2, Math.floor(f)), u = f - i, o = strand * N + i;
+	return solver.spacing[o] + (solver.spacing[o + 1] - solver.spacing[o]) * u;
+}
+
+/** Taps of a vertex's frame window: offsets in half-widths, and weights. */
+const TAPS: [number, number][] = [[-1, 0.25], [0, 0.5], [1, 0.25]];
+
+/**
+ * Frame on one strand averaged over `window` mm either side of share s (TAPS): center into c,
+ * quaternion into q; returns the spacing there, averaged the same way.
+ */
+function windowFrame(solver: PathSolver, strand: number, s: number, window: number, c: Float64Array | number[], q: Float64Array | number[]): number {
+	if (window <= 0) {
+		strandFrame(solver, strand, s, c, q);
+		return strandSpacing(solver, strand, s);
+	}
+	const d = window / Math.max(1e-6, solver.length[strand]), ct = [0, 0, 0], qt = [0, 0, 0, 1], q0 = [0, 0, 0, 1];
+	// the centre's quaternion sets the sign the others are averaged with
+	strandFrame(solver, strand, s, ct, q0);
+	c[0] = c[1] = c[2] = 0;
+	let qx = 0, qy = 0, qz = 0, qw = 0, lam = 0;
+	for (const [t, w] of TAPS) {
+		const st = s + t * d;
+		strandFrame(solver, strand, st, ct, qt);
+		const sg = qt[0] * q0[0] + qt[1] * q0[1] + qt[2] * q0[2] + qt[3] * q0[3] < 0 ? -w : w;
+		c[0] += ct[0] * w; c[1] += ct[1] * w; c[2] += ct[2] * w;
+		qx += qt[0] * sg; qy += qt[1] * sg; qz += qt[2] * sg; qw += qt[3] * sg;
+		lam += strandSpacing(solver, strand, st) * w;
+	}
+	const l = Math.hypot(qx, qy, qz, qw) || 1;
+	q[0] = qx / l; q[1] = qy / l; q[2] = qz / l; q[3] = qw / l;
+	return lam;
+}
+
+/**
+ * A vertex's frame: on its strand pair (a, b) blended by `beta`, each averaged over `window` mm
+ * either side of share s. Center into c, quaternion into q; returns the bulge factor and spacing.
+ */
+export function vertexFrame(solver: PathSolver, a: number, b: number, s: number, beta: number, window: number, c: Float64Array | number[], q: Float64Array | number[]): { k: number; spacing: number } {
+	let spacing = windowFrame(solver, a, s, window, c, q), k = solver.bulge[a];
+	if (a === b || beta <= 0) return { k, spacing };
+	const c2 = [0, 0, 0], q2 = [0, 0, 0, 0];
+	const sp2 = windowFrame(solver, b, s, window, c2, q2);
+	for (let j = 0; j < 3; j++) c[j] += (c2[j] - c[j]) * beta;
+	nlerp(q[0], q[1], q[2], q[3], q2[0], q2[1], q2[2], q2[3], beta, q);
+	k += (solver.bulge[b] - k) * beta;
+	spacing += (sp2 - spacing) * beta;
+	return { k, spacing };
+}
+
 /** Frame blended between two strands (a, b) by `beta`. Returns the bulge factor. */
 export function blendedFrame(solver: PathSolver, a: number, b: number, s: number, beta: number, c: Float64Array | number[], q: Float64Array | number[]): number {
 	const k = strandFrame(solver, a, s, c, q);
@@ -155,17 +213,21 @@ export function deformMesh(
 ): void {
 	const bones = solver.bones, strands = solver.strands;
 	const c = [0, 0, 0], q = [0, 0, 0, 1], g = [0, 0, 0];
-	const { path, offset, normal, weights, clear, colliders } = bound;
+	const { path, offset, normal, weights, clear, colliders, window, drape } = bound;
 	const nCaps = capsules ? Math.min(bound.caps, capsules.length / 8) : 0;
 	for (let i = 0; i < bound.nv; i++) {
 		const o3 = i * 3, o4 = i * 4;
 		const s = path[o4], beta = path[o4 + 1], ra = path[o4 + 2], rb = path[o4 + 3];
-		const k = blendedFrame(solver, ra, rb, s, beta, c, q);
+		const { k, spacing } = vertexFrame(solver, ra, rb, s, beta, window[i], c, q);
 		const gk = 1 + (k - 1) * weights[o4];
 		const Q: Quat = [q[0], q[1], q[2], q[3]];
-		const d = qRotate(Q, [offset[o3], offset[o3 + 1] * gk, offset[o3 + 2] * gk]);
+		// the part of the rest drape let go (MusclePathDef.drape)
+		const lose = 1 - (solver.drape[ra] + (solver.drape[rb] - solver.drape[ra]) * beta);
+		const oy = offset[o3 + 1] - lose * drape[o3 + 1], oz = offset[o3 + 2] - lose * drape[o3 + 2];
+		const d = qRotate(Q, [offset[o3] * spacing, oy * gk, oz * gk]);
 		let px = c[0] + d[0], py = c[1] + d[1], pz = c[2] + d[2];
-		let n = qRotate(Q, normalize([normal[o3] * gk, normal[o3 + 1], normal[o3 + 2]]));
+		// normals take the inverse transpose of the scaling: along the strand by 1/spacing, across by 1/gk
+		let n = qRotate(Q, normalize([(normal[o3] * gk) / spacing, normal[o3 + 1], normal[o3 + 2]]));
 		for (const [aw, bone] of [[weights[o4 + 1], strands[ra].originBone], [weights[o4 + 2], strands[ra].insertionBone]]) {
 			if (aw <= 0) continue;
 			const B = bones[bone];

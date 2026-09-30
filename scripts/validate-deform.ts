@@ -44,9 +44,9 @@ const JOINTS: Record<string, JointSpec> = {
 	shoulder: {
 		rig: shoulderRig,
 		poses: [
-			{}, { flexion: 90 }, { flexion: 180 }, { flexion: -60 }, { abduction: 90 }, { abduction: 180 },
-			{ flexion: 90, abduction: -40 }, { flexion: 90, abduction: 90 }, { rotation: -90 }, { rotation: 70 },
-			{ abduction: 90, rotation: -90 }, { abduction: 90, rotation: 70 }, { flexion: 180, rotation: -60 },
+			{}, { flexion: 90 }, { flexion: 180 }, { flexion: -10 }, { abduction: 90 }, { abduction: 180 },
+			{ flexion: 90, abduction: 90 }, { rotation: -30 }, { rotation: 70 },
+			{ abduction: 90, rotation: -30 }, { abduction: 90, rotation: 70 }, { flexion: 180, rotation: -30 },
 			{ elevation: 35 }, { elevation: -10 }, { protraction: 25 }, { protraction: -25 }, { flexion: 120, protraction: 25 }
 		],
 		bulge: [2, 5, 3],
