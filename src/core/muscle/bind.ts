@@ -7,6 +7,11 @@
  * distant parts of a tightly curved path. Its offset and normal are stored in the frame there, so
  * the rest pose is rebuilt exactly whatever s it got.
  *
+ * Near each end a vertex blends toward riding the attachment bone rigidly: over the anchor length,
+ * and, for a fleshy attachment (via points on the attachment bone), wherever the mesh lies on that
+ * bone along the stretch of strand fixed to it (attachWeights), so the attached surface never
+ * slides into the bone.
+ *
  * The cross-section profile along s gives each vertex a belly weight (1 in the widest part, near
  * 0 in tendon) that scales the bulge, and gives each strand its twist distribution: twist goes
  * where the muscle is thin, so the belly doesn't wring.
@@ -15,7 +20,7 @@
  */
 import type { Quat } from '../math';
 import { qRotate } from '../math';
-import { sdfGradient, sdfSample, SDF_FAR } from '../sdf';
+import { sdfSample, SDF_FAR } from '../sdf';
 import type { IndexArray, SdfGrid } from '../types';
 import { blendedFrame, capsuleDistance, type CapsuleArray } from './deform';
 import type { PathSolver } from './path';
@@ -39,12 +44,6 @@ export interface BoundMesh {
 	weights: Float32Array;
 	/** per vertex: rest clearance from each collider bone (mm; SDF_FAR where none) */
 	clear: Float32Array;
-	/**
-	 * per vertex, 12 floats: exit direction out of each collider bone. Unit vectors in the vertex's
-	 * frame (the bone's outward normal nearest the vertex at rest: the side it lies on), or zero
-	 * where there is none.
-	 */
-	exit: Float32Array;
 	/** collider bones, -1 for unused slots */
 	colliders: [number, number, number, number];
 	/** cross-section profile along the strands (N samples, 1 = widest) */
@@ -210,6 +209,34 @@ export function bindMesh(
 		weights[v * 4 + 2] = anchorI > 0 ? 1 - smooth((1 - s) / anchorI) : 0;
 		weights[v * 4 + 3] = SDF_FAR;
 	}
+	if (def.attach !== false) {
+		const { start: st0, adj: adj0 } = adjacency(index, nv);
+		// per strand, how far (in samples) its path stays fixed to its origin bone from the start, and to
+		// its insertion bone from the end: to the last / first of its points on that bone (at rest)
+		const fixedTo = (strand: number, end: 0 | 1): number => {
+			const st = solver.strands[strand], bone = end ? st.insertionBone : st.originBone;
+			let k = end ? N - 1 : 0;
+			for (const e of st.elements) {
+				if (!e.point || e.bone !== bone) continue;
+				let best = Infinity, at = 0;
+				for (let i = 0; i < N; i++) {
+					const o = (strand * N + i) * 3, d = Math.hypot(P[o] - e.p[0], P[o + 1] - e.p[1], P[o + 2] - e.p[2]);
+					if (d < best) { best = d; at = i; }
+				}
+				k = end ? Math.min(k, at) : Math.max(k, at);
+			}
+			return end ? N - 1 - k : k;
+		};
+		for (const end of [0, 1] as const) {
+			const bone = (v: number) => {
+				const st = solver.strands[path[v * 4 + 2]];
+				return end ? st.insertionBone : st.originBone;
+			};
+			const fixed = (v: number) => fixedTo(path[v * 4 + 2], end);
+			const w = attachWeights(rest, nv, path, bone, fixed, fields, st0, adj0, end, N);
+			for (let v = 0; v < nv; v++) weights[v * 4 + 1 + end] = Math.max(weights[v * 4 + 1 + end], w[v]);
+		}
+	}
 
 	const names = def.collide ?? boneNames.filter((_, b) => fields[b]);
 	if (names.length > 4) throw new Error(`${name}: at most 4 collider bones`);
@@ -219,20 +246,50 @@ export function bindMesh(
 		if (b < 0 || !fields[b]) throw new Error(`${name}: collider ${n} has no distance field`);
 		colliders[k] = b;
 	});
-	const exit = new Float32Array(nv * 12);
-	for (let v = 0; v < nv; v++) {
-		const [x, y, z] = [rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2]];
-		blendedFrame(solver, path[v * 4 + 2], path[v * 4 + 3], path[v * 4], path[v * 4 + 1], c, q);
-		const qi: Quat = [-q[0], -q[1], -q[2], q[3]];
+	for (let v = 0; v < nv; v++)
 		for (let k = 0; k < 4; k++) {
 			const g = colliders[k] >= 0 ? fields[colliders[k]] : null;
-			clear[v * 4 + k] = g ? sdfSample(g, x, y, z) : SDF_FAR;
-			const n = g && clear[v * 4 + k] < SDF_FAR - 1 ? sdfGradient(g, x, y, z) : null;
-			if (n) exit.set(qRotate(qi, n), v * 12 + k * 3);
+			clear[v * 4 + k] = g ? sdfSample(g, rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2]) : SDF_FAR;
 		}
-	}
 
-	return { name, muscle: mi, nv, layer: def.layer, caps: 0, path, offset, normal, weights, clear, exit, colliders, profile };
+	return { name, muscle: mi, nv, layer: def.layer, caps: 0, path, offset, normal, weights, clear, colliders, profile };
+}
+
+/** Rest clearance from a bone within which a vertex is attached to it (fully, not at all), mm. */
+const ATTACH: [number, number] = [1, 4];
+/** Mesh smoothing passes over the attachment weights (so the surface above blends in). */
+const ATTACH_SMOOTH = 4;
+
+/**
+ * How far each vertex rides the bone its origin (end 0) or insertion (end 1) attaches to, for a
+ * fleshy attachment: along the stretch of its strand fixed to that bone (`fixed`, samples from that
+ * end), vertices on the bone ride it fully (ATTACH); the weights are then spread a little over the
+ * mesh so the surface above follows partly.
+ */
+function attachWeights(
+	rest: Float32Array, nv: number, path: Float32Array, boneOf: (v: number) => number, fixed: (v: number) => number,
+	fields: (SdfGrid | null)[], start: Uint32Array, adj: Uint32Array, end: 0 | 1, N: number
+): Float32Array {
+	const w = new Float32Array(nv);
+	const smooth = (a: number, b: number, x: number) => { const u = Math.min(1, Math.max(0, (x - a) / (b - a))); return u * u * (3 - 2 * u); };
+	for (let v = 0; v < nv; v++) {
+		const b = boneOf(v), g = b < fields.length ? fields[b] : null, f = fixed(v);
+		if (!g || f <= 0) continue;
+		const clear = sdfSample(g, rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2]);
+		const k = (end ? 1 - path[v * 4] : path[v * 4]) * (N - 1);
+		w[v] = (1 - smooth(ATTACH[0], ATTACH[1], clear)) * (1 - smooth(f, f + 1.5, k));
+	}
+	const raw = w.slice(), tmp = new Float32Array(nv);
+	for (let it = 0; it < ATTACH_SMOOTH; it++) {
+		for (let v = 0; v < nv; v++) {
+			let sum = 0, n = 0;
+			for (let j = start[v]; j < start[v + 1]; j++) { sum += w[adj[j]]; n++; }
+			tmp[v] = n ? 0.5 * w[v] + (0.5 * sum) / n : w[v];
+		}
+		w.set(tmp);
+	}
+	for (let v = 0; v < nv; v++) w[v] = Math.max(w[v], raw[v]);
+	return w;
 }
 
 /**

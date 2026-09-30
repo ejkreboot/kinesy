@@ -53,6 +53,16 @@ export const DEFAULT_PATH_OPTIONS: PathOptions = { unwrapSteps: 6, bellyFrac: 0.
 type WrapElement = { point: false; surface: number; side: number };
 type Element = { point: true; bone: number; p: Vec3 } | WrapElement;
 
+/** Samples over which a strand's end direction is taken, for its end frames. */
+const END_DIR = 3;
+
+/** A strand's directions at its start and end, each over END_DIR samples (X: N sampled points). */
+function endDirections(X: Float64Array, N: number): [Vec3, Vec3] {
+	const k = Math.min(END_DIR, N - 1);
+	const dir = (a: number, b: number) => unit([X[b * 3] - X[a * 3], X[b * 3 + 1] - X[a * 3 + 1], X[b * 3 + 2] - X[a * 3 + 2]]);
+	return [dir(0, k), dir(N - 1 - k, N - 1)];
+}
+
 /** Gauss-Seidel sweeps over a run of consecutive wraps. */
 const RUN_SWEEPS = 3;
 
@@ -224,12 +234,13 @@ export class PathSolver {
 			const r0 = perpendicularTo(t0);
 			w.Rn.set(r0, 0);
 			this.transport(w);
-			const e = (N - 1) * 3;
-			// rest bone transforms are the identity: world = bone frame
-			st.t0 = t0;
-			st.r0 = r0;
-			st.tE = [w.T[e], w.T[e + 1], w.T[e + 2]];
-			st.rE = [w.Rn[e], w.Rn[e + 1], w.Rn[e + 2]];
+			const e = (N - 1) * 3, tN: Vec3 = [w.T[e], w.T[e + 1], w.T[e + 2]], [d0, dN] = endDirections(w.X, N);
+			// rest bone transforms are the identity: world = bone frame; the end frames are kept about the
+			// end directions (see strandFrames), turned there from the end tangents
+			st.t0 = d0;
+			st.r0 = alignOnto(r0, t0, d0);
+			st.tE = dN;
+			st.rE = alignOnto([w.Rn[e], w.Rn[e + 1], w.Rn[e + 2]], tN, dN);
 			st.restLength = polyLength(w.poly);
 		}
 		this.solve(this.restPose);
@@ -418,11 +429,17 @@ export class PathSolver {
 			t.set(tl, o3);
 			return qRotate(q, rl);
 		};
-		const r0 = follow(bones[st.originBone].q, h.r0, h.t0, [T[0], T[1], T[2]]);
+		// the end frames follow the strand's direction over its last few samples, not its last segment
+		// alone: that can be a short dive onto an attachment inside a wrap, swinging round as the wrap's
+		// exit moves, and the twist measured about it would swing with it
+		// (turned between those and the end tangents by least rotations, which the rest pass inverts)
+		const [d0, dN] = endDirections(w.X, N);
+		const e = (N - 1) * 3, t0: Vec3 = [T[0], T[1], T[2]], tN: Vec3 = [T[e], T[e + 1], T[e + 2]];
+		const r0 = alignOnto(follow(bones[st.originBone].q, h.r0, h.t0, d0), d0, t0);
 		Rn[0] = r0[0]; Rn[1] = r0[1]; Rn[2] = r0[2];
 		this.transport(w);
-		const e = (N - 1) * 3, tN: Vec3 = [T[e], T[e + 1], T[e + 2]], rN: Vec3 = [Rn[e], Rn[e + 1], Rn[e + 2]];
-		const target = follow(bones[st.insertionBone].q, h.rE, h.tE, tN);
+		const rN: Vec3 = [Rn[e], Rn[e + 1], Rn[e + 2]];
+		const target = alignOnto(follow(bones[st.insertionBone].q, h.rE, h.tE, dN), dN, tN);
 		const c = cross(rN, target);
 		const raw = Math.atan2(dot(c, tN), dot(rN, target));
 		const phi = (this.twistAngle[s] += wrapPi(raw - this.twistAngle[s]));
@@ -483,7 +500,7 @@ export class PathSolver {
 	 */
 	private wrapRun(run: WrapElement[], P: Vec3, S: Vec3, bones: Rigid[], out: number[]): void {
 		if (run.length === 1) {
-			this.wrapInto(run[0].surface, run[0].side, P, S, bones, out);
+			this.wrapInto(run[0], P, S, bones, out);
 			return;
 		}
 		const pts: number[][] = run.map(() => []);
@@ -499,16 +516,16 @@ export class PathSolver {
 			for (let j = 0; j < run.length; j++) {
 				const from = exitBefore(j), to = entryAfter(j);
 				pts[j].length = 0;
-				this.wrapInto(run[j].surface, run[j].side, from, to, bones, pts[j]);
+				this.wrapInto(run[j], from, to, bones, pts[j]);
 			}
 		for (const p of pts) for (const v of p) out.push(v);
 	}
 
-	private wrapInto(si: number, side: number, P: Vec3, S: Vec3, bones: Rigid[], out: number[]): boolean {
-		const sf = this.surfaces[si], b = bones[sf.bone], d = sf.def;
+	private wrapInto(e: { surface: number; side: number }, P: Vec3, S: Vec3, bones: Rigid[], out: number[]): boolean {
+		const sf = this.surfaces[e.surface], b = bones[sf.bone], d = sf.def;
 		const cr = qRotate(b.q, d.center);
 		const c: Vec3 = [cr[0] + b.t[0], cr[1] + b.t[1], cr[2] + b.t[2]];
-		if (d.kind === 'cylinder') return wrapCylinder(P, S, c, qRotate(b.q, sf.axis), d.radius, side, out);
+		if (d.kind === 'cylinder') return wrapCylinder(P, S, c, qRotate(b.q, sf.axis), d.radius, e.side, out, d.extent);
 		const M = qToMat3(b.q), R = sf.R, Rw: number[] = new Array(9);
 		for (let col = 0; col < 3; col++)
 			for (let row = 0; row < 3; row++) Rw[col * 3 + row] = M[row] * R[col * 3] + M[3 + row] * R[col * 3 + 1] + M[6 + row] * R[col * 3 + 2];
@@ -530,7 +547,7 @@ export class PathSolver {
 		const P = (els[a] as { p: Vec3 }).p, S = (els[b] as { p: Vec3 }).p; // rest: bone frame = world
 		const arc = (side: number) => {
 			const out: number[] = [];
-			return this.wrapInto(e.surface, side, P, S, this.bones, out) ? polyLength([...P, ...out, ...S]) : 0;
+			return this.wrapInto({ surface: e.surface, side }, P, S, this.bones, out) ? polyLength([...P, ...out, ...S]) : 0;
 		};
 		const ccw = arc(1), cw = arc(-1), straight = Math.hypot(S[0] - P[0], S[1] - P[1], S[2] - P[2]);
 		if (ccw > straight + 1e-6 && cw > straight + 1e-6) return ccw <= cw ? 1 : -1;

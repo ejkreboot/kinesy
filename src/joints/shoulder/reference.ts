@@ -24,7 +24,7 @@ export const reference = /* html */ `
 </div>
 <div>
 	<p class="eyebrow">Scapulohumeral rhythm</p>
-	<p class="small">Raising the arm overhead takes about 120° at the glenohumeral joint and 60° of scapular upward rotation, roughly 2:1 overall. The first ~30° is a setting phase in which the scapula moves little. In this model the scapula starts turning at 30° and then rotates 2° for every 5° of arm elevation; the clavicle elevating at the sternoclavicular joint supplies about a quarter of it. The readout under the sliders shows the split.</p>
+	<p class="small">Raising the arm overhead takes about 150° at the glenohumeral joint and 30° of scapular upward rotation. The first ~30° is a setting phase in which the scapula moves little. In this model the scapula starts turning at 30° and then rotates 1° for every 5° of arm elevation; the clavicle elevating at the sternoclavicular joint supplies about a quarter of it. The readout under the sliders shows the split.</p>
 </div>
 <div>
 	<p class="eyebrow">Force couples</p>

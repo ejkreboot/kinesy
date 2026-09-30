@@ -49,6 +49,32 @@ test('cylinder wrap follows a helix: length matches the unrolled straight line',
 	}
 });
 
+test('finite cylinder: full wrap within its extent, straight well beyond it, continuous between', () => {
+	const c: Vec3 = [0, 0, 0], a: Vec3 = [0, 0, 1], r = 6, extent: [number, number] = [-20, 20];
+	// a segment crossing the axis square to it at height z
+	const run = (z: number) => {
+		const out: number[] = [];
+		const on = wrapCylinder([30, 10, z], [-25, 8, z], c, a, r, 1, out, extent);
+		return { on, out };
+	};
+	const inf: number[] = [];
+	wrapCylinder([30, 10, 0], [-25, 8, 0], c, a, r, 1, inf);
+	assert.deepEqual(run(0).out, inf, 'inside the extent it is the infinite cylinder');
+	assert.equal(run(200).on, false, 'far past the end it runs straight');
+	// fading out: every point moves little per mm of height, and ends on the straight line
+	let prev = run(15).out;
+	for (let z = 16; z <= 80; z++) {
+		const { out } = run(z);
+		if (!out.length) break;
+		assert.equal(out.length, prev.length);
+		for (let k = 0; k < out.length; k += 3) near(Math.hypot(out[k] - prev[k], out[k + 1] - prev[k + 1]), 0, 2, `step at z ${z}`);
+		prev = out;
+	}
+	// a segment running nearly along the axis does not wrap (it would slide off the end)
+	const along: number[] = [];
+	assert.equal(wrapCylinder([4, 0, -60], [-3, 1, 60], c, a, r, 1, along, extent), false);
+});
+
 test('sphere wrap: great-circle tangents', () => {
 	const R = [1, 0, 0, 0, 1, 0, 0, 0, 1], rad = 10;
 	const P: Vec3 = [25, 3, 0], S: Vec3 = [-22, 4, 1];

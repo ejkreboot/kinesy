@@ -7,16 +7,16 @@
  *   2. cross-section scaled by 1 + (k − 1)·belly, k the strand's bulge factor;
  *   3. position = center + frame · offset; normal = frame · (rest normal under the same scale);
  *   4. near each end, blend toward riding the attachment bone rigidly;
- *   5. kept out of bone distance fields and the capsules of muscles in lower layers, only as far
- *      as the vertex is deeper than it sat at rest. The nearest way out (the distance field's
- *      gradient) is right unless the vertex has gone past a bone's midline, where it points to the
- *      far side and the vertex would snap through. So a vertex that lay against a bone at rest, is
- *      now deep in it, and whose nearest way out is not the side it lay on, instead walks back out
- *      along that side: its side of first contact, recorded at rest in its own frame so it turns
- *      with the muscle as the bone moves beneath. The two are blended on depth, disagreement and
- *      rest distance, and a smooth ramp keeps the margin, so every step is continuous and nothing
- *      snaps. Capsules are convex and use their gradient; they push only muscle belly away from
- *      attachments (tendons slide over deep muscles on bursae).
+ *   5. kept out of bone distance fields (and, if on, the capsules of muscles in lower layers), only
+ *      as far as the vertex is deeper than it sat at rest: back to the surface along the nearest way
+ *      out (the distance field's gradient), then out to the margin by a smooth ramp. Keeping muscles on
+ *      the right side of a bone is the strands' job (wraps, contact between layers); this only settles
+ *      shallow contact. Where the nearest way out is ambiguous it lets go instead, smoothly, so a vertex
+ *      never flips from one side of a bone to the other: deep in it (its strand has gone into the bone,
+ *      as at the shoulder's extremes; RELEASE), moved far to get out (RELEASE), or near the middle of a
+ *      thin part of a bone like the scapular spine, where the gradient taken RIDGE either side shrinks.
+ *      Capsules push only muscle belly away from attachments (tendons slide over deep muscles on
+ *      bursae).
  *
  * Pure TypeScript, no DOM or three.js dependency.
  */
@@ -37,45 +37,17 @@ export interface CollideOptions {
 
 export const DEFAULT_COLLIDE_OPTIONS: CollideOptions = { margin: 1.2, soft: 0.4, passes: 2 };
 
-/** Steps when walking out of an obstacle, then bisection steps (the shader uses the same counts). */
-export const TRACE_STEPS = 16;
-export const BISECT_STEPS = 5;
-/** Smallest walking step, mm (bisection refines it). */
-const TRACE_MIN = 0.5;
-/** Furthest a vertex walks out of an obstacle, mm (more than any bone is thick). */
-export const WALK_MAX = 80;
 /** How far below its target clearance a vertex must be before it is pushed, mm (float noise). */
 const TOUCH = 1e-3;
 
 type Sd = (x: number, y: number, z: number) => number;
-const NO_EXIT = [0, 0, 0];
 
-/** Distance to walk from `p` along unit `dir` (at most WALK_MAX) until `sd` rises to `level`. */
-export function walkOut(sd: Sd, p: ArrayLike<number>, dir: ArrayLike<number>, level: number): number {
-	const at = (t: number) => sd(p[0] + dir[0] * t, p[1] + dir[1] * t, p[2] + dir[2] * t) - level;
-	let lo = 0, t = 0;
-	for (let k = 0; k < TRACE_STEPS; k++) {
-		const d = at(t);
-		if (d >= 0) {
-			let hi = t;
-			for (let b = 0; b < BISECT_STEPS && hi > lo; b++) {
-				const mid = (lo + hi) / 2;
-				if (at(mid) >= 0) hi = mid;
-				else lo = mid;
-			}
-			return hi;
-		}
-		lo = t;
-		if (t >= WALK_MAX) return WALK_MAX;
-		t = Math.min(WALK_MAX, t + Math.max(-d, TRACE_MIN));
-	}
-	return t;
-}
-
-/** Depth past which a vertex may use its exit direction instead of the nearest way out, mm (from, to). */
-export const EXIT_DEPTH: [number, number] = [1, 3];
-/** Rest clearance within which a vertex's exit direction is trusted, mm (fully, not at all). */
-export const EXIT_NEAR: [number, number] = [4, 8];
+/** Depth into an obstacle over which a vertex's push fades out (full, none), mm. */
+export const RELEASE: [number, number] = [6, 12];
+/** Half-span of the gradient that measures how clear the nearest way out is, mm. */
+export const RIDGE = 2.5;
+/** Its length (1 away from a midplane) over which the push fades in (none, full). */
+export const RIDGE_FADE: [number, number] = [0.3, 0.9];
 /** Belly weight over which proxies take hold (tendon: none, belly: full). */
 export const PROXY_BELLY: [number, number] = [0.3, 0.6];
 
@@ -87,31 +59,31 @@ function smoothstep(a: number, b: number, x: number): number {
 /**
  * Keep point p (updated in place) out of one obstacle with distance function `sd` and unit
  * outward gradient `grad` (false where it has none): back to the surface (or, for a vertex
- * embedded at rest, its rest depth), then out to `target` along the gradient. `e`: the vertex's
- * exit direction (unit, or zero for none) and `rest` its rest clearance, which decide when it
- * leaves along e rather than the nearest way (see step 5 above).
+ * embedded at rest, its rest depth), then out to `target` along the gradient; let go smoothly
+ * where that way out is ambiguous (see step 5 above).
  */
-export function avoid(sd: Sd, grad: (p: number[], out: number[]) => boolean, p: number[], e: ArrayLike<number>, rest: number, target: number, soft: number): void {
+export function avoid(sd: Sd, grad: (p: number[], out: number[]) => boolean, p: number[], target: number, soft: number): void {
 	let d = sd(p[0], p[1], p[2]);
 	if (d >= target - TOUCH) return;
-	const g = [0, 0, 0], level = Math.min(target, 0);
+	const g = [0, 0, 0], level = Math.min(target, 0), p0 = [p[0], p[1], p[2]];
+	const keep = (1 - smoothstep(RELEASE[0], RELEASE[1], target - d)) * smoothstep(RIDGE_FADE[0], RIDGE_FADE[1], ridge(sd, p));
+	if (keep <= 0) return;
 	if (d < level) {
 		const back = grad(p, g) ? level - d : 0;
-		const pg = [p[0] + g[0] * back, p[1] + g[1] * back, p[2] + g[2] * back];
-		const hasE = e[0] !== 0 || e[1] !== 0 || e[2] !== 0;
-		const w = hasE
-			? smoothstep(EXIT_DEPTH[0], EXIT_DEPTH[1], level - d) *
-				smoothstep(0.2, -0.2, g[0] * e[0] + g[1] * e[1] + g[2] * e[2]) *
-				(1 - smoothstep(EXIT_NEAR[0], EXIT_NEAR[1], rest))
-			: 0;
-		if (w > 0) {
-			const t = walkOut(sd, p, e, level);
-			for (let k = 0; k < 3; k++) p[k] = pg[k] + (p[k] + e[k] * t - pg[k]) * w;
-		} else for (let k = 0; k < 3; k++) p[k] = pg[k];
+		for (let k = 0; k < 3; k++) p[k] += g[k] * back;
 		d = sd(p[0], p[1], p[2]);
 	}
 	const push = pushRamp(target - d, soft);
 	if (push > 0 && grad(p, g)) for (let k = 0; k < 3; k++) p[k] += g[k] * push;
+	const moved = Math.hypot(p[0] - p0[0], p[1] - p0[1], p[2] - p0[2]);
+	const w = keep * (1 - smoothstep(RELEASE[0], RELEASE[1], moved));
+	if (w < 1) for (let k = 0; k < 3; k++) p[k] = p0[k] + (p[k] - p0[k]) * w;
+}
+
+/** Length of the distance function's gradient taken RIDGE either side of p: 1 clear of a midplane, 0 on it. */
+function ridge(sd: Sd, p: ArrayLike<number>): number {
+	const h = RIDGE, x = p[0], y = p[1], z = p[2];
+	return Math.hypot(sd(x + h, y, z) - sd(x - h, y, z), sd(x, y + h, z) - sd(x, y - h, z), sd(x, y, z + h) - sd(x, y, z - h)) / (2 * h);
 }
 
 /** Capsules: 8 floats each, a.xyz, radius at a, b.xyz, radius at b. */
@@ -202,24 +174,19 @@ export function deformMesh(
 			const rn = qRotate(B.q, [restNormal[o3], restNormal[o3 + 1], restNormal[o3 + 2]]);
 			n = normalize([n[0] + (rn[0] - n[0]) * aw, n[1] + (rn[1] - n[1]) * aw, n[2] + (rn[2] - n[2]) * aw]);
 		}
-		// collisions, in each obstacle's frame, leaving along the exit directions (turned with the frame)
-		const p = [px, py, pz], ex = bound.exit, o12 = i * 12;
-		const exitDir = (k: number): Vec3 => {
-			const v: Vec3 = [ex[o12 + k * 3], ex[o12 + k * 3 + 1], ex[o12 + k * 3 + 2]];
-			return v[0] === 0 && v[1] === 0 && v[2] === 0 ? v : qRotate(Q, v);
-		};
+		// collisions, in each obstacle's frame
+		const p = [px, py, pz];
 		for (let pass = 0; pass < opts.passes; pass++) {
 			for (let slot = 0; slot < 4; slot++) {
 				const b = colliders[slot], G = b >= 0 ? fields[b] : null;
 				if (!G) continue;
 				const B = bones[b], l = boneLocal(B, p[0], p[1], p[2]);
 				if (sdfSample(G, l[0], l[1], l[2]) >= SDF_FAR - 1) continue;
-				const e = exitDir(slot), el = e[0] === 0 && e[1] === 0 && e[2] === 0 ? e : qRotate([-B.q[0], -B.q[1], -B.q[2], B.q[3]], e);
 				avoid((x, y, z) => sdfSample(G, x, y, z), (v, out) => {
 					const gr = sdfGradient(G, v[0], v[1], v[2]);
 					if (gr) { out[0] = gr[0]; out[1] = gr[1]; out[2] = gr[2]; }
 					return !!gr;
-				}, l, el, clear[o4 + slot], Math.min(clear[o4 + slot], opts.margin), opts.soft);
+				}, l, Math.min(clear[o4 + slot], opts.margin), opts.soft);
 				const w = qRotate(B.q, l);
 				p[0] = w[0] + B.t[0]; p[1] = w[1] + B.t[1]; p[2] = w[2] + B.t[2];
 			}
@@ -233,7 +200,7 @@ export function deformMesh(
 					avoid((x, y, z) => capsuleDistance(capsules!, o, x, y, z, g), (v, out) => {
 						capsuleDistance(capsules!, o, v[0], v[1], v[2], out);
 						return out[0] !== 0 || out[1] !== 0 || out[2] !== 0;
-					}, p, NO_EXIT, SDF_FAR, Math.min(weights[o4 + 3], opts.margin), opts.soft);
+					}, p, Math.min(weights[o4 + 3], opts.margin), opts.soft);
 				}
 				for (let k = 0; k < 3; k++) p[k] = q0[k] + (p[k] - q0[k]) * tb;
 			}

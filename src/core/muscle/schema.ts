@@ -34,6 +34,12 @@ export interface CylinderSurface {
 	center: Vec3;
 	axis: Vec3;
 	radius: number;
+	/**
+	 * how far the cylinder reaches along its axis from `center`, [lo, hi] mm; beyond that its wrap
+	 * fades to a straight line over 25 mm, as it does for a path running within 25–40° of the axis
+	 * (wrap.ts). Infinite if left out.
+	 */
+	extent?: [number, number];
 }
 
 /**
@@ -98,6 +104,13 @@ export interface MusclePathDef {
 	 * mm: the attachment's footprint, so broad attachments stay on the bone; default [8, 8]
 	 */
 	anchor?: [number, number];
+	/**
+	 * whether the surface a muscle is attached by rides its bone: vertices lying on the origin or
+	 * insertion bone, over the stretch from that end where the mesh lies along it (a fleshy
+	 * attachment, like brachialis on the front of the humerus), move rigidly with it rather than
+	 * sliding with the strand; default true
+	 */
+	attach?: boolean;
 }
 
 export interface JointPaths {
@@ -105,6 +118,14 @@ export interface JointPaths {
 	muscles: MusclePathDef[];
 	/** samples per strand; default 48 */
 	samples?: number;
+	/**
+	 * vertex collision passes over the bones (default 2): more settle vertices between two bones, but
+	 * where muscles lie between several (the shoulder's scapula, humerus and ribs) they shuttle
+	 * vertices from one to the next
+	 */
+	collidePasses?: number;
+	/** false turns contact between strands of different layers off for the joint (strandContact.ts) */
+	contact?: false;
 }
 
 export function isPoint(e: PathElement): e is PathPoint | JoinPoint {

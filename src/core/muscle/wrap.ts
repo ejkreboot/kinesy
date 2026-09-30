@@ -73,8 +73,14 @@ function arcSteps(dth: number): number {
  * Wrap P → S over the cylinder through c along unit axis a with radius r, counterclockwise about a
  * for side +1, clockwise for -1. Appends the wrap's points (first tangent point to last, x y z)
  * to `out` and returns true, or returns false when the path does not touch the cylinder.
+ *
+ * With `extent` [lo, hi] (along a from c, mm), the cylinder is only that long: where the straight
+ * segment P → S passes nearest the axis beyond it, the whole wrap (dives included) is drawn back
+ * toward the segment, fully by EXTENT_FADE past the end, so a path passing the axis far from the
+ * bone the cylinder stands for runs straight, and in between the wrap fades smoothly. So is a
+ * segment running nearly along the axis (EXTENT_STEEP), which a finite cylinder would slip off.
  */
-export function wrapCylinder(P: Vec3, S: Vec3, c: Vec3, a: Vec3, r: number, side: number, out: number[]): boolean {
+export function wrapCylinder(P: Vec3, S: Vec3, c: Vec3, a: Vec3, r: number, side: number, out: number[], extent?: readonly [number, number]): boolean {
 	const e1 = perpendicular(a);
 	// e2 = side · (a × e1): mirroring the cross-section turns a clockwise wrap into a counterclockwise one
 	const e2: Vec3 = [
@@ -87,8 +93,27 @@ export function wrapCylinder(P: Vec3, S: Vec3, c: Vec3, a: Vec3, r: number, side
 	const pz = vp[0] * a[0] + vp[1] * a[1] + vp[2] * a[2];
 	const sx = vs[0] * e1[0] + vs[1] * e1[1] + vs[2] * e1[2], sy = vs[0] * e2[0] + vs[1] * e2[1] + vs[2] * e2[2];
 	const sz = vs[0] * a[0] + vs[1] * a[1] + vs[2] * a[2];
-	const at = (x: number, y: number, z: number) =>
+	const dx = sx - px, dy = sy - py, dz = sz - pz, dd = dx * dx + dy * dy + dz * dz;
+	// a finite cylinder: how much of the wrap to keep, from where the straight line passes nearest the
+	// axis and how steeply it crosses it (one running along the axis would slide off the end)
+	let k = 1;
+	if (extent) {
+		const d2 = dx * dx + dy * dy, t = d2 > 1e-12 ? Math.min(1, Math.max(0, -(px * dx + py * dy) / d2)) : 0, z = pz + dz * t;
+		k = smoothstep(extent[0] - EXTENT_FADE, extent[0], z) * (1 - smoothstep(extent[1], extent[1] + EXTENT_FADE, z));
+		k *= 1 - smoothstep(EXTENT_STEEP[1], EXTENT_STEEP[0], Math.abs(dz) / Math.sqrt(dd || 1));
+		if (k === 0) return false;
+	}
+	const at = (x: number, y: number, z: number) => {
+		if (k < 1) {
+			// toward the nearest point of the straight segment
+			const t = dd > 1e-12 ? Math.min(1, Math.max(0, ((x - px) * dx + (y - py) * dy + (z - pz) * dz) / dd)) : 0;
+			const qx = px + dx * t, qy = py + dy * t, qz = pz + dz * t;
+			x = qx + (x - qx) * k;
+			y = qy + (y - qy) * k;
+			z = qz + (z - qz) * k;
+		}
 		out.push(c[0] + x * e1[0] + y * e2[0] + z * a[0], c[1] + x * e1[1] + y * e2[1] + z * a[1], c[2] + x * e1[2] + y * e2[2] + z * a[2]);
+	};
 	// an endpoint inside the cylinder is reached by a radial dive from the surface, wrapped or not,
 	// so the straight and wrapped paths agree at lift-off
 	const rOut = r * 1.001, dp = Math.hypot(px, py), ds = Math.hypot(sx, sy);
@@ -112,6 +137,11 @@ export function wrapCylinder(P: Vec3, S: Vec3, c: Vec3, a: Vec3, r: number, side
  * Wrap P → S over the ellipsoid at c with semi-axes `radii` along the columns of rotation `R`
  * (column-major 3x3: local x, y, z axes in world). The short way round; appends the wrap's points
  * to `out` and returns true, or false when the segment misses the ellipsoid.
+ *
+ * Where the straight line passes within SIDE_BLEND of the center, the short way is about to switch
+ * sides; there the wraps round both sides are blended, point by point, by how far the line is from
+ * the center, so the path slides across the ellipsoid instead of jumping from one side to the other
+ * (passing through it at the switch). Nothing is remembered: the same ends give the same path.
  */
 export function wrapEllipsoid(P: Vec3, S: Vec3, c: Vec3, radii: Vec3, R: number[], out: number[]): boolean {
 	// to the unit sphere: local = diag(1/radii) Rᵀ (X − c)
@@ -134,6 +164,10 @@ export function wrapEllipsoid(P: Vec3, S: Vec3, c: Vec3, radii: Vec3, R: number[
 	const e1 = [p[0] / pl, p[1] / pl, p[2] / pl];
 	const e2 = [n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]];
 	const sx = s[0] * e1[0] + s[1] * e1[1] + s[2] * e1[2], sy = s[0] * e2[0] + s[1] * e2[1] + s[2] * e2[2];
+	// signed distance of the center from the line p → s in that plane (s lies counterclockwise, so ≥ 0)
+	const dx = sx - pl, dy = sy, dl = Math.hypot(dx, dy);
+	const h = dl > 1e-12 ? Math.abs(dy * pl - dx * 0) / dl : 0;
+	const blend = 0.5 * (1 - smoothstep(0, SIDE_BLEND, h));
 	const at = (x: number, y: number) => {
 		const u = [(x * e1[0] + y * e2[0]) * radii[0], (x * e1[1] + y * e2[1]) * radii[1], (x * e1[2] + y * e2[2]) * radii[2]];
 		out.push(c[0] + R[0] * u[0] + R[3] * u[1] + R[6] * u[2], c[1] + R[1] * u[0] + R[4] * u[1] + R[7] * u[2], c[2] + R[2] * u[0] + R[5] * u[1] + R[8] * u[2]);
@@ -142,7 +176,15 @@ export function wrapEllipsoid(P: Vec3, S: Vec3, c: Vec3, radii: Vec3, R: number[
 	const sl = Math.hypot(sx, sy), pIn = pl < 1.001, sIn = sl < 1.001 && sl > 1e-9;
 	const w = circleWrap(pl, 0, sx, sy, 1);
 	if (pIn) at(1.001, 0);
-	if (w) {
+	// the long way (clockwise), only where the line passes near the center
+	const wl = blend > 0 ? circleWrap(pl, 0, sx, -sy, 1) : null;
+	if (w && wl) {
+		const m = Math.max(arcSteps(w.dth), arcSteps(wl.dth));
+		for (let k = 0; k <= m; k++) {
+			const a = w.th0 + (w.dth * k) / m, b = -(wl.th0 + (wl.dth * k) / m);
+			at(Math.cos(a) + (Math.cos(b) - Math.cos(a)) * blend, Math.sin(a) + (Math.sin(b) - Math.sin(a)) * blend);
+		}
+	} else if (w) {
 		const m = arcSteps(w.dth);
 		for (let k = 0; k <= m; k++) {
 			const th = w.th0 + (w.dth * k) / m;
@@ -151,4 +193,20 @@ export function wrapEllipsoid(P: Vec3, S: Vec3, c: Vec3, radii: Vec3, R: number[
 	}
 	if (sIn) at((sx * 1.001) / sl, (sy * 1.001) / sl);
 	return !!w || pIn || sIn;
+}
+
+/** Length beyond a cylinder's extent over which its wrap fades to a straight line, mm. */
+const EXTENT_FADE = 50;
+/**
+ * cos of the angles to a finite cylinder's axis between which a crossing segment's wrap fades in:
+ * none within 25° of the axis, all beyond 40°.
+ */
+const EXTENT_STEEP = [Math.cos((15 * Math.PI) / 180), Math.cos((25 * Math.PI) / 180)];
+
+/** Distance of the line from the center, in radii, within which both sides of an ellipsoid are blended. */
+const SIDE_BLEND = 0.3;
+
+function smoothstep(a: number, b: number, x: number): number {
+	const u = Math.min(1, Math.max(0, (x - a) / (b - a)));
+	return u * u * (3 - 2 * u);
 }

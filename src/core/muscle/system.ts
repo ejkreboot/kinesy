@@ -33,7 +33,7 @@ export class MuscleSystem {
 
 	constructor(paths: JointPaths, assets: JointAssets, rig: Rig, opts: { path?: Partial<PathOptions>; collide?: Partial<CollideOptions>; contact?: Partial<ContactOptions> | false; proxies?: boolean } = {}) {
 		this.assets = assets;
-		this.collide = { ...DEFAULT_COLLIDE_OPTIONS, ...opts.collide };
+		this.collide = { ...DEFAULT_COLLIDE_OPTIONS, ...(paths.collidePasses !== undefined ? { passes: paths.collidePasses } : {}), ...opts.collide };
 		const bones = assets.manifest.bones;
 		this.solver = new PathSolver(paths, rig, bones, opts.path);
 		this.meshes = paths.muscles.map((d) => {
@@ -43,7 +43,8 @@ export class MuscleSystem {
 		});
 		this.bound = this.meshes.map((m) => bindMesh(this.solver, m.name, m.rest, m.index, assets.fields, bones));
 		this.restNormals = this.meshes.map((m) => vertexNormals(m.rest, m.index, m.nv));
-		this.contact = opts.contact === false ? null : buildContactModel(this.solver, this.bound, assets.fields, opts.contact);
+		const contact = opts.contact ?? paths.contact;
+		this.contact = contact === false ? null : buildContactModel(this.solver, this.bound, assets.fields, contact);
 		this.solver.setContact(this.contact);
 		this.proxies = opts.proxies ? buildProxies(this.solver, this.bound) : [];
 		this.capsules = new Float32Array(this.proxies.length * 8);

@@ -126,8 +126,9 @@ const poses = poseGrid(rig, 5);
 const restPose: Pose = Object.fromEntries(rig.def.joints.map((j) => [j.id, j.restAngle]));
 
 /** Sweeps for continuity: each joint over its range in 2° steps, the others at min, mid, max. */
-const sweeps: Pose[][] = rig.def.joints.filter((j) => j.axis).flatMap((j) =>
-	rig.def.joints.filter((o) => o.axis && o !== j).flatMap((o) =>
+const free = rig.def.joints.filter((j) => j.axis && j.max > j.min);
+const sweeps: Pose[][] = free.flatMap((j) =>
+	free.filter((o) => o !== j).flatMap((o) =>
 		[o.min, (o.min + o.max) / 2, o.max].map((ov) => {
 			const out: Pose[] = [];
 			for (let a = j.min; a <= j.max; a += 2) out.push(rig.clamp({ [o.id]: ov, [j.id]: a }));

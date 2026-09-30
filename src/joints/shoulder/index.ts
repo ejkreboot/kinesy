@@ -5,6 +5,7 @@ import type { AssetManifest } from '../../core/types';
 import type { JointModule, NamedView } from '../types';
 import { movements, muscles, scenarios } from './content';
 import { reference } from './reference';
+import { shoulderPaths } from './paths';
 import { armElevation, scapularUpwardRotation, shoulderRig } from './rig';
 
 const signed = (neg: string, pos: string) => (v: number) => {
@@ -27,6 +28,7 @@ export const shoulder: JointModule = {
 	subtitle: 'Right shoulder · drag to rotate',
 	assets: { manifest: manifest as unknown as AssetManifest, geometry: geometryUrl, fields: fieldsUrl },
 	rig: shoulderRig,
+	paths: shoulderPaths,
 	controls: [
 		{ joint: 'flexion', label: 'Flexion', format: signed('Ext', 'Flex'), ticks: ['Ext 60°', '60°', 'Flex 180°'] },
 		{ joint: 'abduction', label: 'Abduction', format: signed('Add', 'Abd'), ticks: ['Add 40°', '70°', 'Abd 180°'] },

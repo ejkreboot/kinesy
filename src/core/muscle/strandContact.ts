@@ -22,6 +22,12 @@
  *   - Attachments hold: there is no contact within either muscle's anchor length of its ends, where
  *     its vertices ride the bone rather than the strand.
  *
+ * Strands are kept out of bone the same way (BoneContacts): each sample outside every bone, at its
+ * rest clearance or its mesh's thickness toward the bone if less, pushed out along the side of the
+ * bone it was on (followed through the walk), never the nearest way out, which flips across a thin
+ * bone; the strand bends taut to its fixed points. Wraps then only shape a path; they no longer have
+ * to keep it out of bone everywhere, which at a joint as mobile as the shoulder they cannot.
+ *
  * Contacts are recorded where two strands are within reach at rest. Every rule is smooth (no
  * thresholds), so the result is a continuous function of the pose.
  *
@@ -41,11 +47,13 @@ export interface ContactOptions {
 	soft: number;
 	/** passes over every contact per step of the walk */
 	sweeps: number;
+	/** keep strands out of bone as well (BoneContacts); experimental, off by default */
+	bones: boolean;
 }
 
 // reach 9 mm and beyond takes in strands that only meet in the flexed elbow's crease, where the side
 // between them turns too fast to follow
-export const DEFAULT_CONTACT_OPTIONS: ContactOptions = { reach: 6, soft: 0.5, sweeps: 3 };
+export const DEFAULT_CONTACT_OPTIONS: ContactOptions = { reach: 6, soft: 0.5, sweeps: 3, bones: false };
 
 /** The contacts between one upper strand and one lower strand. */
 export interface StrandContact {
@@ -63,9 +71,26 @@ export interface StrandContact {
 	base: Float64Array;
 }
 
+/** Samples of strands kept out of bones: one row per (strand, sample, bone). */
+export interface BoneContacts {
+	strand: Int32Array;
+	sample: Int32Array;
+	bone: Int32Array;
+	/**
+	 * clearance kept from the bone, mm: the rest clearance, or the mesh's thickness toward the bone if
+	 * less (fixed at rest: looked up in the strand's current frame instead, a push that rolled the frame
+	 * changed the clearance, which changed the push, and neighbouring poses settled differently)
+	 */
+	need: Float64Array;
+	/** side: the bone's outward direction there, in the bone's frame (3 per row), at rest and tracked */
+	n0: Float64Array;
+	n: Float64Array;
+}
+
 /** Everything contact needs for one joint. */
 export interface ContactModel {
 	contacts: StrandContact[];
+	bones: BoneContacts;
 	/** per strand, N·EXT_DIRS: its mesh's extent across it (see extentTable); null without a mesh */
 	ext: (Float64Array | null)[];
 	/** per strand, N: 1 where its mesh covers the sample, else 0 */
@@ -144,6 +169,8 @@ export function buildContactModel(solver: PathSolver, bound: BoundMesh[], fields
 						const vp = [v[0] - vt * t[0], v[1] - vt * t[1], v[2] - vt * t[2]], r = Math.hypot(vp[0], vp[1], vp[2]);
 						if (r < MIN_REST) continue;
 						const n = [vp[0] / r, vp[1] / r, vp[2] / r];
+						// muscles only meet where nothing solid lies between them
+						if (boneBetween(fields, x, y, z, c)) continue;
 						strandFrame(solver, u, i / (N - 1), cu, qu);
 						const thick = extentAt(el, sigma, q, n[0], n[1], n[2]) + extentAt(eu, i, qu, -n[0], -n[1], -n[2]);
 						if (r > thick + o.reach) continue;
@@ -160,7 +187,71 @@ export function buildContactModel(solver: PathSolver, bound: BoundMesh[], fields
 				}
 		}
 	const maxExt = Float64Array.from(ext, (e) => (e ? Math.max(...e) : 0));
-	return { contacts, ext, cover, restClear, maxExt, fields, opts: o, free: new Float64Array(P.length) };
+	const noBones: BoneContacts = { strand: new Int32Array(0), sample: new Int32Array(0), bone: new Int32Array(0), need: new Float64Array(0), n0: new Float64Array(0), n: new Float64Array(0) };
+	return { contacts, bones: o.bones ? buildBoneContacts(solver, ext, fields) : noBones, ext, cover, restClear, maxExt, fields, opts: o, free: new Float64Array(P.length) };
+}
+
+/** Whether any bone (at rest: world = bone frame) lies across the segment from (x, y, z) to c. */
+function boneBetween(fields: (SdfGrid | null)[], x: number, y: number, z: number, c: number[]): boolean {
+	for (let k = 1; k < 8; k++) {
+		const t = k / 8, px = x + (c[0] - x) * t, py = y + (c[1] - y) * t, pz = z + (c[2] - z) * t;
+		for (const g of fields) if (g && sdfSample(g, px, py, pz) < 0) return true;
+	}
+	return false;
+}
+
+/**
+ * A row for every interior sample of every strand with a mesh and every bone with a distance field,
+ * except where the strand is fixed to that bone (the stretch to its last point on it, or its anchor
+ * length, from the end attached to it). The side is the bone's outward direction at rest, or where the
+ * sample lies beyond the field, the direction from the field's middle.
+ */
+function buildBoneContacts(solver: PathSolver, ext: (Float64Array | null)[], fields: (SdfGrid | null)[]): BoneContacts {
+	const N = solver.N, P = solver.pos, Q = solver.quat, rows: number[][] = [], dirs: number[][] = [];
+	const q = [0, 0, 0, 1];
+	for (let s = 0; s < solver.strands.length; s++) {
+		const e = ext[s], st = solver.strands[s];
+		if (!e || solver.joined[s]) continue;
+		const def = solver.muscles[st.muscle].def, h = st.restLength / (N - 1), [a0, a1] = def.anchor ?? [8, 8];
+		// how far the strand is fixed to its origin / insertion bone, in samples from that end
+		const fixed = (bone: number, end: 0 | 1) => {
+			let k = end ? a1 / h : a0 / h;
+			for (const el of st.elements) {
+				if (!el.point || el.bone !== bone) continue;
+				let best = Infinity, at = 0;
+				for (let i = 0; i < N; i++) {
+					const o = (s * N + i) * 3, d = Math.hypot(P[o] - el.p[0], P[o + 1] - el.p[1], P[o + 2] - el.p[2]);
+					if (d < best) { best = d; at = i; }
+				}
+				k = Math.max(k, end ? N - 1 - at : at);
+			}
+			return k;
+		};
+		const f0 = fixed(st.originBone, 0), f1 = fixed(st.insertionBone, 1);
+		for (let i = 1; i < N - 1; i++)
+			for (let b = 0; b < fields.length; b++) {
+				const g = fields[b];
+				if (!g || (b === st.originBone && i <= f0 + 1) || (b === st.insertionBone && N - 1 - i <= f1 + 1)) continue;
+				const o = (s * N + i) * 3, x = P[o], y = P[o + 1], z = P[o + 2];
+				const d = sdfSample(g, x, y, z);
+				let n = d < SDF_FAR - 1 ? sdfGradient(g, x, y, z) : null;
+				if (!n) {
+					const c = [g.lo[0] + (g.nx * g.h) / 2, g.lo[1] + (g.ny * g.h) / 2, g.lo[2] + (g.nz * g.h) / 2];
+					const v = [x - c[0], y - c[1], z - c[2]], l = Math.hypot(v[0], v[1], v[2]) || 1;
+					n = [v[0] / l, v[1] / l, v[2] / l];
+				}
+				lerpQuat(Q, s, N, i, q);
+				const thick = extentAt(e, i, q, -n[0], -n[1], -n[2]);
+				rows.push([s, i, b, d < SDF_FAR - 1 ? Math.min(d, thick) : thick]);
+				dirs.push(n);
+			}
+	}
+	const n0 = new Float64Array(rows.length * 3);
+	dirs.forEach((n, k) => n0.set(n, k * 3));
+	return {
+		strand: Int32Array.from(rows, (r) => r[0]), sample: Int32Array.from(rows, (r) => r[1]), bone: Int32Array.from(rows, (r) => r[2]),
+		need: Float64Array.from(rows, (r) => r[3]), n0, n: n0.slice()
+	};
 }
 
 /** Reset the tracked points and sides to rest, at the start of a solve. */
@@ -169,6 +260,7 @@ export function resetContacts(m: ContactModel): void {
 		ct.sigma.set(ct.sigma0);
 		ct.n.set(ct.n0);
 	}
+	m.bones.n.set(m.bones.n0);
 }
 
 /** Any side, for side() when only the point and tangent are wanted. */
@@ -190,7 +282,8 @@ export function resolveContacts(solver: PathSolver, m: ContactModel, bones: Rigi
 		for (let k = 0; k < 3; k++) d += ((P[a + k] - F[a + k]) * (1 - f) + (P[a + 3 + k] - F[a + 3 + k]) * f) * n[k];
 		return sign * d;
 	};
-	for (let sweep = 0; sweep < o.sweeps; sweep++)
+	for (let sweep = 0; sweep < o.sweeps; sweep++) {
+		pushOffBones(solver, m, bones, anchors, pushed);
 		for (const ct of m.contacts) {
 			const u = ct.upper, l = ct.lower, eu = m.ext[u]!, el = m.ext[l]!;
 			for (let k = 0; k < ct.i.length; k++) {
@@ -225,6 +318,8 @@ export function resolveContacts(solver: PathSolver, m: ContactModel, bones: Rigi
 				if (low > 0) tent(P, l, N, al, sigma, -n[0] * low, -n[1] * low, -n[2] * low);
 			}
 		}
+	}
+	boneSides(solver, m, bones);
 	// the sides the strands now have, for the next step: trusted as far as the strands are apart
 	// along the old side (where a push couldn't part them, the direction between them means nothing)
 	for (const ct of m.contacts)
@@ -241,6 +336,52 @@ export function resolveContacts(solver: PathSolver, m: ContactModel, bones: Rigi
 			ct.n[k * 3] = x / l; ct.n[k * 3 + 1] = y / l; ct.n[k * 3 + 2] = z / l;
 		}
 }
+
+/**
+ * Push strand samples out of bones, each along its side of the bone, as far as its clearance there
+ * needs and within the strand's bend limit (`pushed`: how far a point has been pushed already this step).
+ */
+function pushOffBones(solver: PathSolver, m: ContactModel, bones: Rigid[], anchors: number[][], pushed: (s: number, x: number, n: number[], sign: number) => number): void {
+	const N = solver.N, P = solver.pos, B = m.bones, o = m.opts;
+	for (let r = 0; r < B.strand.length; r++) {
+		const s = B.strand[r], i = B.sample[r], b = B.bone[r], g = m.fields[b]!, bone = bones[b];
+		const po = (s * N + i) * 3, qi = [-bone.q[0], -bone.q[1], -bone.q[2], bone.q[3]];
+		const l = rotate(qi, P[po] - bone.t[0], P[po + 1] - bone.t[1], P[po + 2] - bone.t[2]);
+		const d = sdfSample(g, l[0], l[1], l[2]), need = B.need[r];
+		if (d >= need || d >= SDF_FAR - 1) continue;
+		const nl = [B.n[r * 3], B.n[r * 3 + 1], B.n[r * 3 + 2]], n = rotate(bone.q, nl[0], nl[1], nl[2]);
+		// how far along the side until the clearance is met (a few steps: the side is not the gradient)
+		let t = need - d;
+		for (let k = 0; k < 3; k++) {
+			const dk = sdfSample(g, l[0] + nl[0] * t, l[1] + nl[1] * t, l[2] + nl[2] * t);
+			if (dk >= SDF_FAR - 1) break;
+			t = Math.min(BONE_WALK, Math.max(0, t + need - dk));
+		}
+		const h = solver.length[s] / (N - 1);
+		const up = Math.min(pushRamp(t, o.soft), Math.max(0, BEND * span(anchors[s], i) * h - pushed(s, i, n, 1)));
+		if (up > 0) tent(P, s, N, anchors[s], i, n[0] * up, n[1] * up, n[2] * up);
+	}
+}
+
+/** Each bone row's side for the next step: the bone's outward direction, trusted as far as the sample is outside it. */
+function boneSides(solver: PathSolver, m: ContactModel, bones: Rigid[]): void {
+	const N = solver.N, P = solver.pos, B = m.bones;
+	for (let r = 0; r < B.strand.length; r++) {
+		const g = m.fields[B.bone[r]]!, bone = bones[B.bone[r]], po = (B.strand[r] * N + B.sample[r]) * 3;
+		const l = rotate([-bone.q[0], -bone.q[1], -bone.q[2], bone.q[3]], P[po] - bone.t[0], P[po + 1] - bone.t[1], P[po + 2] - bone.t[2]);
+		const d = sdfSample(g, l[0], l[1], l[2]);
+		if (d >= SDF_FAR - 1) continue;
+		const gr = sdfGradient(g, l[0], l[1], l[2]);
+		if (!gr) continue;
+		const w = smoothstep(-1, 1, d), o = r * 3;
+		const x = B.n[o] + (gr[0] - B.n[o]) * w, y = B.n[o + 1] + (gr[1] - B.n[o + 1]) * w, z = B.n[o + 2] + (gr[2] - B.n[o + 2]) * w;
+		const len = Math.hypot(x, y, z) || 1;
+		B.n[o] = x / len; B.n[o + 1] = y / len; B.n[o + 2] = z / len;
+	}
+}
+
+/** Furthest a strand sample is walked out of a bone in one push, mm. */
+const BONE_WALK = 40;
 
 /**
  * Point `c` and unit tangent `t` of strand s at `sigma`, and into `out` the tracked side stored at

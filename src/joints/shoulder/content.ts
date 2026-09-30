@@ -240,7 +240,7 @@ export const movements: Movement[] = [
 	{
 		id: 'flexion', label: 'Flexion', range: '0° → 180°', group: ARM, from: at({}), to: { flexion: 180 },
 		prime: ['deltoid_ant', 'pec_clav'], assist: ['coracobrachialis', 'biceps'],
-		note: 'About 60° of the 180° is the scapula upward-rotating (serratus anterior, upper and lower trapezius).'
+		note: 'About 30° of the 180° is the scapula upward-rotating (serratus anterior, upper and lower trapezius).'
 	},
 	{
 		id: 'extension', label: 'Extension', range: 'flex 90° → ext 60°', group: ARM, from: at({ flexion: 90 }), to: { flexion: -60 },
@@ -250,7 +250,7 @@ export const movements: Movement[] = [
 	{
 		id: 'abduction', label: 'Abduction', range: '0° → 180°', group: ARM, from: at({ abduction: 0 }), to: { abduction: 180 },
 		prime: ['deltoid_mid', 'supraspinatus'], assist: ['deltoid_ant'],
-		note: 'Watch the readout under the sliders: about 120° at the glenohumeral joint, 60° at the scapula.'
+		note: 'Watch the readout under the sliders: about 150° at the glenohumeral joint, 30° at the scapula.'
 	},
 	{
 		id: 'adduction', label: 'Adduction', range: '180° → 0°', group: ARM, from: at({ abduction: 180 }), to: { abduction: 0 },
@@ -312,7 +312,7 @@ export const scenarios: Scenario[] = [
 	{ q: 'Which rotator cuff muscle is most often torn or impinged under the acromion?', a: 'Supraspinatus', distractors: ['Infraspinatus', 'Teres minor', 'Subscapularis'], focus: ['supraspinatus'], why: 'Its tendon runs through the narrow space under the acromion and coracoacromial ligament.' },
 	{ q: 'Which rotator cuff muscle internally rotates the humerus?', a: 'Subscapularis', distractors: ['Infraspinatus', 'Teres minor', 'Supraspinatus'], focus: ['subscapularis'], why: 'It is the only cuff muscle on the front of the scapula, inserting on the lesser tubercle.' },
 	{ q: 'Winging of the medial border of the scapula points to weakness of which muscle?', a: 'Serratus anterior', distractors: ['Rhomboid major', 'Pectoralis minor', 'Levator scapulae'], focus: ['serratus'], why: 'Serratus anterior holds the scapula against the ribs. The long thoracic nerve supplies it.' },
-	{ q: 'In full arm elevation (180°), roughly how much motion comes from the scapula rotating on the thorax?', a: '60°', distractors: ['30°', '90°', '120°'], why: 'Scapulohumeral rhythm: about 2° glenohumeral for every 1° scapulothoracic, 120° : 60°. Try the readout under the sliders.' },
+	{ q: 'In full arm elevation (180°), roughly how much motion comes from the scapula rotating on the thorax?', a: '30°', distractors: ['10°', '60°', '90°'], why: 'Scapulohumeral rhythm: after a setting phase of about 30°, the scapula turns 1° for every 5° of arm elevation, 150° : 30°. Try the readout under the sliders.' },
 	{ q: 'Upward rotation of the scapula is produced by a force couple of upper trapezius, lower trapezius, and…', a: 'Serratus anterior', distractors: ['Rhomboid major', 'Levator scapulae', 'Pectoralis minor'], focus: ['serratus', 'trap_upper', 'trap_lower'], why: 'The three pull on different parts of the scapula so it turns rather than slides.' },
 	{ q: 'Besides deltoid, which muscle does the axillary nerve supply?', a: 'Teres minor', distractors: ['Teres major', 'Infraspinatus', 'Subscapularis'], focus: ['teres_minor', 'deltoid_ant', 'deltoid_mid', 'deltoid_post'], why: 'The axillary nerve leaves the quadrangular space to supply teres minor and all three parts of deltoid.' },
 	{ q: 'Which muscle extends, adducts, and internally rotates the humerus and is supplied by the thoracodorsal nerve?', a: 'Latissimus dorsi', distractors: ['Teres major', 'Pectoralis major (sternal head)', 'Posterior deltoid'], focus: ['lat'], why: 'Teres major does the same three things but gets the lower subscapular nerve.' },

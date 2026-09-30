@@ -14,7 +14,7 @@
  */
 import * as THREE from 'three';
 import type { BoundMesh } from '../core/muscle/bind';
-import { BISECT_STEPS, EXIT_DEPTH, EXIT_NEAR, PROXY_BELLY, TRACE_STEPS, WALK_MAX } from '../core/muscle/deform';
+import { PROXY_BELLY, RELEASE, RIDGE, RIDGE_FADE } from '../core/muscle/deform';
 import type { MuscleSystem } from '../core/muscle/system';
 import type { JointAssets } from '../core/types';
 
@@ -38,9 +38,6 @@ attribute vec3 kOffset;
 attribute vec3 kNormal;
 attribute vec4 kWeights;         // belly, origin anchor, insertion anchor, rest proxy clearance
 attribute vec4 kClear;           // rest clearance per collider slot
-attribute vec4 kExit0;           // exit directions (vertex frame): slot 0 .xyz, slot 3 .x
-attribute vec4 kExit1;           // slot 1 .xyz, slot 3 .y
-attribute vec4 kExit2;           // slot 2 .xyz, slot 3 .z
 
 vec3 kPos;
 vec3 kNrm;
@@ -109,46 +106,29 @@ float kRamp(float x, float w) {
 	return x <= 0.0 ? 0.0 : (x < 2.0 * w ? x * x / (4.0 * w) : x - w);
 }
 
-// distance to walk from p along unit dir (at most K_WALK_MAX) until bone b's distance rises to level
-float kWalkBone(int b, vec3 p, vec3 dir, float level) {
-	float lo = 0.0, t = 0.0;
-	for (int k = 0; k < K_TRACE; k++) {
-		float d = kSdfAt(b, p + dir * t) - level;
-		if (d >= 0.0) {
-			float hi = t;
-			for (int j = 0; j < K_BISECT; j++) {
-				if (hi <= lo) break;
-				float mid = 0.5 * (lo + hi);
-				if (kSdfAt(b, p + dir * mid) - level >= 0.0) hi = mid;
-				else lo = mid;
-			}
-			return hi;
-		}
-		lo = t;
-		if (t >= K_WALK_MAX) return K_WALK_MAX;
-		t = min(K_WALK_MAX, t + max(-d, 0.5));
-	}
-	return t;
-}
-
-// keep bone-local point p out of bone b: back to its surface (or rest depth), along the exit
-// direction e where the nearest way out would snap through, then out to target along the gradient
-vec3 kAvoidBone(int b, vec3 p, vec3 e, float rest, float target) {
+// keep bone-local point p out of bone b: back to its surface (or rest depth), then out to target
+// along the gradient; let go smoothly where that way out is ambiguous (see core/muscle/deform.ts)
+vec3 kAvoidBone(int b, vec3 p, float target) {
 	float d = kSdfAt(b, p);
 	if (d >= target - 1e-3) return p;
+	// deep in (the strand has gone into the bone), or near the middle of a thin part where the way
+	// out is ambiguous (the gradient taken K_RIDGE either side shrinks there)
+	vec3 r = vec3(
+		kSdfAt(b, p + vec3(K_RIDGE, 0.0, 0.0)) - kSdfAt(b, p - vec3(K_RIDGE, 0.0, 0.0)),
+		kSdfAt(b, p + vec3(0.0, K_RIDGE, 0.0)) - kSdfAt(b, p - vec3(0.0, K_RIDGE, 0.0)),
+		kSdfAt(b, p + vec3(0.0, 0.0, K_RIDGE)) - kSdfAt(b, p - vec3(0.0, 0.0, K_RIDGE)));
+	float keep = (1.0 - smoothstep(K_RELEASE0, K_RELEASE1, target - d)) * smoothstep(K_RIDGE_F0, K_RIDGE_F1, length(r) / (2.0 * K_RIDGE));
+	if (keep <= 0.0) return p;
+	vec3 p0 = p;
 	float level = min(target, 0.0);
 	if (d < level) {
-		vec3 g = kSdfGrad(b, p);
-		vec3 pg = p + g * (level - d);
-		float w = dot(e, e) > 0.0
-			? smoothstep(K_EXIT_D0, K_EXIT_D1, level - d) * (1.0 - smoothstep(-0.2, 0.2, dot(g, e))) * (1.0 - smoothstep(K_EXIT_N0, K_EXIT_N1, rest))
-			: 0.0;
-		p = w > 0.0 ? mix(pg, p + e * kWalkBone(b, p, e, level), w) : pg;
+		p += kSdfGrad(b, p) * (level - d);
 		d = kSdfAt(b, p);
 	}
 	float push = kRamp(target - d, kCollide.y);
 	if (push > 0.0) p += kSdfGrad(b, p) * push;
-	return p;
+	// or moved far to get out: let go as well
+	return mix(p0, p, keep * (1.0 - smoothstep(K_RELEASE0, K_RELEASE1, length(p - p0))));
 }
 
 vec3 kAvoidCap(int i, vec3 p, float target) {
@@ -203,12 +183,7 @@ void kDeform() {
 		n = normalize(mix(n, kRot(bq, normal), kWeights.z));
 	}
 
-	// keep out of bones (leaving on the side of first contact) and the proxies of lower layers
-	vec3 ex[4];
-	ex[0] = kExit0.xyz;
-	ex[1] = kExit1.xyz;
-	ex[2] = kExit2.xyz;
-	ex[3] = vec3(kExit0.w, kExit1.w, kExit2.w);
+	// keep out of bones and, if on, the proxies of lower layers
 	float tb = smoothstep(K_PROXY_B0, K_PROXY_B1, kWeights.x) * (1.0 - max(kWeights.y, kWeights.z));
 	int passes = int(kCollide.z + 0.5);
 	for (int pass = 0; pass < 4; pass++) {
@@ -219,8 +194,7 @@ void kDeform() {
 			kBone(b, bt, bq);
 			vec3 l = kToBone(p, bt, bq);
 			if (kSdfAt(b, l) >= 98.0) continue;
-			vec3 e = dot(ex[slot], ex[slot]) > 0.0 ? kRot(vec4(-bq.xyz, bq.w), kRot(q, ex[slot])) : vec3(0.0);
-			l = kAvoidBone(b, l, e, kClear[slot], min(kClear[slot], kCollide.x));
+			l = kAvoidBone(b, l, min(kClear[slot], kCollide.x));
 			p = kRot(bq, l) + bt;
 		}
 		// tendons slide over the muscles beneath, attachments hold: proxies push the belly only
@@ -336,13 +310,11 @@ export class MuscleGpu {
 			`#define K_BONE_ROW ${solver.strands.length}`,
 			`#define K_BONES ${nb}`,
 			`#define K_MAX_CAPS ${MAX_CAPSULES}`,
-			`#define K_TRACE ${TRACE_STEPS}`,
-			`#define K_BISECT ${BISECT_STEPS}`,
-			`#define K_WALK_MAX ${WALK_MAX.toFixed(1)}`,
-			`#define K_EXIT_D0 ${EXIT_DEPTH[0].toFixed(3)}`,
-			`#define K_EXIT_D1 ${EXIT_DEPTH[1].toFixed(3)}`,
-			`#define K_EXIT_N0 ${EXIT_NEAR[0].toFixed(3)}`,
-			`#define K_EXIT_N1 ${EXIT_NEAR[1].toFixed(3)}`,
+			`#define K_RELEASE0 ${RELEASE[0].toFixed(3)}`,
+			`#define K_RELEASE1 ${RELEASE[1].toFixed(3)}`,
+			`#define K_RIDGE ${RIDGE.toFixed(3)}`,
+			`#define K_RIDGE_F0 ${RIDGE_FADE[0].toFixed(3)}`,
+			`#define K_RIDGE_F1 ${RIDGE_FADE[1].toFixed(3)}`,
 			`#define K_PROXY_B0 ${PROXY_BELLY[0].toFixed(3)}`,
 			`#define K_PROXY_B1 ${PROXY_BELLY[1].toFixed(3)}`
 		].join('\n');
@@ -378,14 +350,6 @@ export class MuscleGpu {
 		g.setAttribute('kNormal', new THREE.BufferAttribute(b.normal, 3));
 		g.setAttribute('kWeights', new THREE.BufferAttribute(b.weights, 4));
 		g.setAttribute('kClear', new THREE.BufferAttribute(b.clear, 4));
-		// exit directions, 4 slots × 3, into three vec4s: slots 0–2 in .xyz, slot 3 spread over .w
-		const ex = [0, 1, 2].map(() => new Float32Array(b.nv * 4));
-		for (let v = 0; v < b.nv; v++)
-			for (let k = 0; k < 3; k++) {
-				ex[k].set(b.exit.subarray(v * 12 + k * 3, v * 12 + k * 3 + 3), v * 4);
-				ex[k][v * 4 + 3] = b.exit[v * 12 + 9 + k];
-			}
-		ex.forEach((a, k) => g.setAttribute(`kExit${k}`, new THREE.BufferAttribute(a, 4)));
 	}
 
 	/** Patch a material (any built-in with begin_vertex) to deform like `b`. */

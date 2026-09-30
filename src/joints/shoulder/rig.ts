@@ -14,17 +14,25 @@ export function armElevation(p: Pose): number {
 
 /**
  * Scapulohumeral rhythm: scapulothoracic upward rotation for a pose. None during the setting
- * phase (first 30°), then 2° of every 5°, so full elevation splits 120° glenohumeral : 60°
- * scapulothoracic, the classic overall 2:1.
+ * phase (first 30°), then 1° of every 5°, so full elevation splits 150° glenohumeral : 30°
+ * scapulothoracic.
  */
 export function scapularUpwardRotation(p: Pose): number {
-	return Math.max(0, armElevation(p) - 30) * 0.4;
+	return Math.max(0, armElevation(p) - 30) * RHYTHM;
 }
+
+/** Scapular upward rotation per degree of arm elevation past the setting phase (30° at full elevation). */
+const RHYTHM = 0.2;
 
 // Part of the upward rotation comes from the clavicle elevating at the sternoclavicular joint.
 // Its axis is about 35° off the scapula's upward-rotation axis, so cos 35° ≈ 0.8 of it counts.
-const CLAVICLE_SHARE = 0.3;
+// (6° of clavicle elevation at full arm elevation; more lifts the whole girdle.)
+const CLAVICLE_SHARE = 0.2;
 const SC_TO_UPWARD = 0.8;
+// The clavicle also retracts as the arm rises (about 12° at full elevation). That keeps the scapula
+// on the rib cage: rotating about the acromioclavicular joint alone, it swung off the ribs and its
+// inferior angle travelled half as far again as in life.
+const RETRACTION_SHARE = 0.4;
 
 export const shoulderRig: RigDef = {
 	bones: [
@@ -45,7 +53,7 @@ export const shoulderRig: RigDef = {
 		// shoulder girdle, measured at the sternoclavicular joint: + elevation, − depression
 		{ id: 'elevation', axis: 'elevation', restAngle: 0, min: -10, max: 35, initial: 0, coupled: (p) => CLAVICLE_SHARE * scapularUpwardRotation(p) },
 		// + protraction, − retraction
-		{ id: 'protraction', axis: 'protraction', restAngle: 0, min: -25, max: 25, initial: 0 },
+		{ id: 'protraction', axis: 'protraction', restAngle: 0, min: -25, max: 25, initial: 0, coupled: (p) => -RETRACTION_SHARE * scapularUpwardRotation(p) },
 		// no control of its own: driven entirely by the rhythm
 		{ id: 'upwardRotation', axis: 'upwardRotation', restAngle: 0, min: 0, max: 0, initial: 0, coupled: (p) => (1 - CLAVICLE_SHARE * SC_TO_UPWARD) * scapularUpwardRotation(p) }
 	]

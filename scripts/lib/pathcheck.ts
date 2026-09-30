@@ -16,6 +16,8 @@ import { sdfSample } from '../../src/core/sdf';
 import type { AssetManifest, JointAssets } from '../../src/core/types';
 import { elbowPaths } from '../../src/joints/elbow/paths';
 import { elbowRig } from '../../src/joints/elbow/rig';
+import { shoulderPaths } from '../../src/joints/shoulder/paths';
+import { shoulderRig } from '../../src/joints/shoulder/rig';
 
 export interface JointSpec {
 	rig: RigDef;
@@ -34,6 +36,22 @@ export const JOINTS: Record<string, JointSpec> = {
 		sweeps: [
 			{ joint: 'pronation', at: [{ flexion: 0 }, { flexion: 90 }, { flexion: 145 }] },
 			{ joint: 'flexion', at: [{ pronation: -90 }, { pronation: 80 }] }
+		]
+	},
+	shoulder: {
+		rig: shoulderRig,
+		paths: shoulderPaths,
+		poses: [
+			{}, { flexion: 90 }, { flexion: 180 }, { flexion: -60 }, { abduction: 90 }, { abduction: 180 }, { abduction: -40 },
+			{ abduction: 90, rotation: -90 }, { abduction: 90, rotation: 70 }, { flexion: 90, rotation: 70 },
+			{ rotation: -90 }, { rotation: 70 }, { protraction: 25 }, { protraction: -25 }, { elevation: 35 }
+		],
+		sweeps: [
+			{ joint: 'flexion', at: [{}] },
+			{ joint: 'abduction', at: [{}] },
+			{ joint: 'rotation', at: [{}, { abduction: 90 }] },
+			{ joint: 'protraction', at: [{}] },
+			{ joint: 'elevation', at: [{}] }
 		]
 	}
 };
