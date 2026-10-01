@@ -7,7 +7,8 @@ import type { JointModule } from './joints/types';
 const JOINTS: { id: string; label: string; load: () => Promise<JointModule> }[] = [
 	{ id: 'shoulder', label: 'Shoulder', load: () => import('./joints/shoulder').then((m) => m.shoulder) },
 	{ id: 'elbow', label: 'Elbow', load: () => import('./joints/elbow').then((m) => m.elbow) },
-	{ id: 'hand', label: 'Wrist & hand', load: () => import('./joints/hand').then((m) => m.hand) }
+	{ id: 'hand', label: 'Wrist & hand', load: () => import('./joints/hand').then((m) => m.hand) },
+	{ id: 'hip', label: 'Hip', load: () => import('./joints/hip').then((m) => m.hip) }
 ];
 /** shown to first-time visitors */
 const DEFAULT_JOINT = 'elbow';

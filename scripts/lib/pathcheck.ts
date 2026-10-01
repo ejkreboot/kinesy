@@ -20,6 +20,8 @@ import { elbowPaths } from '../../src/joints/elbow/paths';
 import { elbowRig } from '../../src/joints/elbow/rig';
 import { shoulderPaths } from '../../src/joints/shoulder/paths';
 import { shoulderRig } from '../../src/joints/shoulder/rig';
+import { hipPaths } from '../../src/joints/hip/paths';
+import { hipRig } from '../../src/joints/hip/rig';
 import type { BakeAxisSpec } from './bake';
 
 export interface JointSpec {
@@ -33,6 +35,8 @@ export interface JointSpec {
 	solid?: string[];
 	/** the grid baked lines of action are solved on (lib/bake.ts) */
 	bake?: BakeAxisSpec[];
+	/** bake rest bands drawn through their meshes (reference.ts, ReferenceOptions.guide); joints baked before it was added keep straight starts */
+	bakeGuide?: boolean;
 }
 
 export const JOINTS: Record<string, JointSpec> = {
@@ -64,6 +68,23 @@ export const JOINTS: Record<string, JointSpec> = {
 		solid: ['thorax'],
 		// the glenohumeral joint; the girdle's own sliders are carried (baked.ts)
 		bake: [{ joint: 'flexion', step: 10 }, { joint: 'abduction', step: 10 }, { joint: 'rotation', step: 10 }]
+	},
+	hip: {
+		rig: hipRig,
+		paths: hipPaths,
+		poses: [
+			{}, { flexion: 45 }, { flexion: 90 }, { flexion: 120 }, { flexion: -20 }, { abduction: 45 }, { abduction: -20 },
+			{ rotation: 40 }, { rotation: -45 }, { flexion: 90, rotation: 40 }, { flexion: 90, rotation: -45 },
+			{ flexion: 90, abduction: 45 }, { flexion: -20, abduction: 30 }, { abduction: 30, rotation: -30 }
+		],
+		sweeps: [
+			{ joint: 'flexion', at: [{}, { abduction: 30 }] },
+			{ joint: 'abduction', at: [{}, { flexion: 90 }] },
+			{ joint: 'rotation', at: [{}, { flexion: 90 }] }
+		],
+		// a ball joint, gridded over all three of its angles
+		bake: [{ joint: 'flexion', step: 10 }, { joint: 'abduction', step: 5 }, { joint: 'rotation', step: 5 }],
+		bakeGuide: true
 	}
 };
 

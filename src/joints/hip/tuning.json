@@ -1,0 +1,406 @@
+{
+	"lattice": [
+		{
+			"joint": "flexion",
+			"step": 30
+		},
+		{
+			"joint": "abduction",
+			"step": 15
+		},
+		{
+			"joint": "rotation",
+			"step": 15
+		}
+	],
+	"keys": {
+		"sartorius": [
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 30,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 6.5,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 45,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 7.5,
+				"shift": 12,
+				"length": 1.21
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": -15,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 0,
+				"shift": -8.5,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": -20,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 8.5,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": -20,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": 15,
+				"lift": 9.5,
+				"shift": -21,
+				"length": 1.1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 0,
+					"rotation": 30
+				},
+				"roll": 0,
+				"lift": 13.5,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 120,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 6,
+				"shift": -1.5,
+				"length": 1.22
+			}
+		],
+		"it_tract": [
+			{
+				"pose": {
+					"flexion": -20,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": -12,
+				"lift": 2,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 30,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": -12,
+				"lift": 3.5,
+				"shift": -5,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 60,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": -1,
+				"lift": 15,
+				"shift": -2,
+				"length": 0.98
+			},
+			{
+				"pose": {
+					"flexion": 90,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": -17,
+				"lift": 18.5,
+				"shift": -4.5,
+				"length": 0.92
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 0,
+					"rotation": 30
+				},
+				"roll": 0,
+				"lift": 25,
+				"shift": -0.5,
+				"length": 0.89
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 0,
+					"rotation": -45
+				},
+				"roll": 0,
+				"lift": 22,
+				"shift": 3,
+				"length": 0.98
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 15,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 4,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 30,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 25,
+				"shift": 10.5,
+				"length": 1.11
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 45,
+					"rotation": 0
+				},
+				"roll": -22,
+				"lift": 25,
+				"shift": 9.5,
+				"length": 1.16
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 0,
+					"rotation": 15
+				},
+				"roll": 0,
+				"lift": 25,
+				"shift": 3,
+				"length": 0.96
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 0,
+					"rotation": 40
+				},
+				"roll": 8,
+				"lift": 12.5,
+				"shift": 22,
+				"length": 1.13
+			}
+		],
+		"glut_med": [
+			{
+				"pose": {
+					"flexion": 90,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": 7,
+				"lift": -10,
+				"shift": -3,
+				"length": 0.86
+			},
+			{
+				"pose": {
+					"flexion": 120,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -15,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 45,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 2,
+				"shift": -9.5,
+				"length": 1.24
+			}
+		],
+		"glut_max": [
+			{
+				"pose": {
+					"flexion": 120,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 12.5,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 60,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": 2,
+				"lift": 9.5,
+				"shift": -16,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 90,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": -2,
+				"lift": -2,
+				"shift": -22,
+				"length": 0.94
+			},
+			{
+				"pose": {
+					"flexion": 90,
+					"abduction": 15,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 5.5,
+				"shift": -9.5,
+				"length": 0.98
+			},
+			{
+				"pose": {
+					"flexion": 90,
+					"abduction": 30,
+					"rotation": 0
+				},
+				"roll": 17,
+				"lift": 0,
+				"shift": -7.5,
+				"length": 0.81
+			}
+		],
+		"tfl": [
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 45,
+					"rotation": 0
+				},
+				"roll": -8,
+				"lift": 8.5,
+				"shift": -0.5,
+				"length": 1.37
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 30,
+					"rotation": 0
+				},
+				"roll": -7,
+				"lift": 7,
+				"shift": -6,
+				"length": 1.03
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 15,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 4,
+				"shift": -3.5,
+				"length": 1.07
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": -20,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 1,
+				"shift": -5,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 0,
+					"rotation": 40
+				},
+				"roll": 0,
+				"lift": 0,
+				"shift": -5.5,
+				"length": 1
+			}
+		],
+		"rectus_fem": [
+			{
+				"pose": {
+					"flexion": 90,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -15,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 120,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -17.5,
+				"shift": -5.5,
+				"length": 1.26
+			}
+		],
+		"psoas": [
+			{
+				"pose": {
+					"flexion": 120,
+					"abduction": 0,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -2,
+				"shift": 16,
+				"length": 1
+			}
+		]
+	}
+}

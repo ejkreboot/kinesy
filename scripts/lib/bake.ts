@@ -158,7 +158,7 @@ export class ChainBaker {
 		this.jobs = which.map((w) => {
 			const def = paths.muscles.find((m) => m.mesh === w.mesh)!;
 			const fixed = def.strands[w.k].filter(isPoint) as PathPoint[];
-			const model = bandModel(this.ctx, w.mesh, fixed, obstaclesOf(J, paths, w.mesh));
+			const model = bandModel(this.ctx, w.mesh, fixed, { ...obstaclesOf(J, paths, w.mesh), guide: J.spec.bakeGuide });
 			return { which: w, fixed, model, frame: model.bones[model.bones.length - 1] };
 		});
 		if (axes.some((a) => !a.values.includes(this.ctx.restPose[a.joint]))) throw new Error('every bake axis needs its rest angle as a grid value');

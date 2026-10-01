@@ -200,10 +200,33 @@ export interface ReferenceOptions {
 	 * above it than at rest, rather than off whichever of their surfaces is nearest (deepSurface)
 	 */
 	under?: string[];
+	/**
+	 * start the rest band through the muscle's own mesh rather than straight between its fixed points, so
+	 * relaxing it off the bones keeps it on the side of them the muscle lies (psoas in front of the hip joint,
+	 * where the straight line runs through the femoral head)
+	 */
+	guide?: boolean;
 }
 
 /** Cell size of the coarse hash a deep surface is searched with (UNDER_REACH is far for CELL), mm. */
 const FAR_CELL = 12;
+
+/** A rest band's point drawn through its mesh: the centroid of the mesh's vertices within GUIDE_SLAB mm of
+ * the plane across the straight line there and GUIDE_REACH mm of the line's point (unchanged where too few). */
+const GUIDE_SLAB = 4, GUIDE_REACH = 45, GUIDE_MIN = 6;
+
+function guidePoint(R: ArrayLike<number>, X: number[], A: number[], B: number[]): number[] {
+	const d = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], l = Math.hypot(d[0], d[1], d[2]) || 1, u = d.map((v) => v / l);
+	let n = 0;
+	const c = [0, 0, 0];
+	for (let i = 0; i < R.length; i += 3) {
+		const dx = R[i] - X[0], dy = R[i + 1] - X[1], dz = R[i + 2] - X[2];
+		if (Math.abs(dx * u[0] + dy * u[1] + dz * u[2]) > GUIDE_SLAB || dx * dx + dy * dy + dz * dz > GUIDE_REACH * GUIDE_REACH) continue;
+		c[0] += R[i]; c[1] += R[i + 1]; c[2] += R[i + 2];
+		n++;
+	}
+	return n >= GUIDE_MIN ? c.map((v) => v / n) : X;
+}
 
 /** Within this distance of a muscle's deep surface a band passing under the muscle is held below it, mm. */
 const UNDER_REACH = 25;
@@ -345,11 +368,15 @@ export function bandModel(ctx: RouteContext, mesh: string, fixed: PathPoint[], o
 			});
 		}
 	}
-	// rest: straight stretches relaxed off bone, then the clearance each muscle beneath allows (what it had)
-	const W0 = J.rig.solve(ctx.restPose);
+	// rest: straight stretches (or drawn through the mesh, opts.guide) relaxed off bone, then the clearance
+	// each muscle beneath allows (what it had)
+	const W0 = J.rig.solve(ctx.restPose), R = opts.guide ? J.assets.muscles.find((m) => m.name === mesh)!.rest : null;
 	const rest = fixed.slice(1).map((f, k) => {
 		const A = world(W0[bi(fixed[k].bone)], fixed[k].p), B = world(W0[bi(f.bone)], f.p);
-		return Array.from({ length: POINTS }, (_, j) => A.map((v, c) => v + ((B[c] - v) * j) / (POINTS - 1)));
+		return Array.from({ length: POINTS }, (_, j) => {
+			const X = A.map((v, c) => v + ((B[c] - v) * j) / (POINTS - 1));
+			return R && j > 0 && j < POINTS - 1 ? guidePoint(R, X, A, B) : X;
+		});
 	});
 	relax(rest, W0, ctx.restPose, 800);
 	if (beneath.length) {

@@ -427,7 +427,7 @@ export class PathSolver {
 			if (this.contact) resolveContacts(this, this.contact, bones, this.anchors);
 			for (let s = 0; s < S; s++) if (!this.joined[s]) this.strandFrames(this.strands[s], bones, s);
 			this.rollSheets();
-			if (this.tuner) this.applyTuning();
+			if (this.tuner) this.applyTuning(bones);
 			// virtual bones: each join carried by its strand's motion since rest (identity at rest)
 			for (const j of this.joins) {
 				if (j.sigma < 0) {
@@ -572,16 +572,18 @@ export class PathSolver {
 	/**
 	 * Hand-tuned adjustments at the current step (tune.ts), after the frames: each sample moved off the line
 	 * by lift (along the strand's rest direction away from the bone, carried in its frame) and shift (across
-	 * that), then its frame rolled about the line; both scaled by bump(s), so the attachments stay put.
+	 * that), then its frame rolled about the line; both scaled by tuneWeights, so the attachments and the
+	 * stretches pinned to one bone stay put.
 	 */
-	private applyTuning(): void {
+	private applyTuning(bones: Rigid[]): void {
 		const N = this.N, P = this.pos, Q = this.quat;
 		this.strands.forEach((st, s) => {
 			const t = this.tune[st.muscle];
 			if (!t || (t.roll === 0 && t.lift === 0 && t.shift === 0)) return;
 			const th = Number.isNaN(this.outward[s]) ? 0 : this.outward[s], co = Math.cos(th), si = Math.sin(th);
+			const wts = this.tuneWeights(st, s, bones);
 			for (let i = 0; i < N; i++) {
-				const b = bump(i / (N - 1));
+				const b = wts[i];
 				if (b <= 0) continue;
 				const o = (s * N + i) * 4, q: Quat = [Q[o], Q[o + 1], Q[o + 2], Q[o + 3]];
 				if (t.lift !== 0 || t.shift !== 0) {
@@ -596,6 +598,35 @@ export class PathSolver {
 				}
 			}
 		});
+	}
+
+	/**
+	 * How much of a hand-tuned adjustment each sample of strand s takes: bump(t) over each stretch between
+	 * neighbouring fixed points that joins two bones (t its share of that stretch, so none at the fixed points),
+	 * none over a stretch pinned to one bone (the iliotibial tract along the femur). A strand with no via points
+	 * is one stretch: bump over the whole strand.
+	 */
+	private tuneWeights(st: Strand, s: number, bones: Rigid[]): Float64Array {
+		const N = this.N, P = this.pos, w = new Float64Array(N);
+		// each fixed point's sample (nearest), in order along the strand
+		const at = st.elements.filter((e) => e.point).map((e, k, all) => {
+			const { bone, p } = e as { bone: number; p: Vec3 };
+			if (k === 0) return { i: 0, bone };
+			if (k === all.length - 1) return { i: N - 1, bone };
+			const b = bones[bone], r = qRotate(b.q, p), x = [r[0] + b.t[0], r[1] + b.t[1], r[2] + b.t[2]];
+			let best = Infinity, i = 0;
+			for (let j = 0; j < N; j++) {
+				const o = (s * N + j) * 3, d = (P[o] - x[0]) ** 2 + (P[o + 1] - x[1]) ** 2 + (P[o + 2] - x[2]) ** 2;
+				if (d < best) { best = d; i = j; }
+			}
+			return { i, bone };
+		});
+		for (let k = 0; k + 1 < at.length; k++) {
+			const a = at[k], b = at[k + 1];
+			if (a.bone === b.bone || b.i <= a.i) continue;
+			for (let i = a.i; i <= b.i; i++) w[i] = Math.max(w[i], bump((i - a.i) / (b.i - a.i)));
+		}
+		return w;
 	}
 
 	/**

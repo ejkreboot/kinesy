@@ -96,9 +96,9 @@ def _sphere(P):
     return c, float(np.sqrt(s[3] + c @ c))
 
 
-def _humeral_head(fixed, moving):
-    """Sphere fit to the humeral head: seeded by the patch facing the glenoid, then refined on the
-    whole proximal surface lying near the sphere."""
+def _ball_head(fixed, moving, name):
+    """Sphere fit to the head of a ball-and-socket joint's moving bone: seeded by the patch facing the
+    socket on the fixed bone, then refined on the whole proximal surface lying near the sphere."""
     Ms = sample(moving, 40000)
     dist = cKDTree(sample(fixed, 40000)).query(Ms)[0]
     c, r = _sphere(Ms[dist < dist.min() + 6])
@@ -106,8 +106,16 @@ def _humeral_head(fixed, moving):
         near = Ms[(np.abs(np.linalg.norm(Ms - c, axis=1) - r) < 2.5) & (Ms[:, 2] > c[2] - 0.6 * r)]
         c, r = _sphere(near)
     err = np.abs(np.linalg.norm(near - c, axis=1) - r).mean()
-    print(f'    humeral head radius {r:.1f} mm, fit residual {err:.2f} mm ({len(near)} pts)')
+    print(f'    {name} radius {r:.1f} mm, fit residual {err:.2f} mm ({len(near)} pts)')
     return c
+
+
+def _humeral_head(fixed, moving):
+    return _ball_head(fixed, moving, 'humeral head')
+
+
+def _femoral_head(fixed, moving):
+    return _ball_head(fixed, moving, 'femoral head')
 
 
 def _clavicle_medial_end(fixed, moving):
@@ -128,7 +136,7 @@ def _distal_center(m):
     return (low[low[:, 0].argmin()] + low[low[:, 0].argmax()]) / 2
 
 
-CENTERS = {'humeral_head': _humeral_head, 'clavicle_medial_end': _clavicle_medial_end,
+CENTERS = {'humeral_head': _humeral_head, 'femoral_head': _femoral_head, 'clavicle_medial_end': _clavicle_medial_end,
            'acromioclavicular': _acromioclavicular}
 
 TIPS = {
@@ -143,7 +151,8 @@ def anatomical(src, spec):
     moving = src.load(spec['moving'])
     point = CENTERS[spec['center']](fixed, moving)
     d = spec['dir']
-    if d == 'humeral_shaft':
+    if d in ('humeral_shaft', 'femoral_shaft'):
+        # the head's centre to the midpoint between the distal condyles / epicondyles: the bone's long axis
         d = point - _distal_center(moving)
     elif d == 'plane_normal':
         S = sample(moving, 30000)

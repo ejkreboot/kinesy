@@ -9,8 +9,9 @@
  *   - length: the belly's length over what its line of action gives it (below 1: shorter, the tendons
  *     taking up the rest, and thicker).
  *
- * Roll, lift and shift peak mid-belly and fade to nothing at both attachments (BUMP), so the attachments
- * stay put. Keys sit on a lattice over some of the rig's joints (each `step` degrees from its rest angle,
+ * Roll, lift and shift peak mid-way along each stretch of the strand that crosses the joint (between fixed
+ * points on two bones) and fade to nothing at its fixed points (bump), so the attachments stay put, and so do
+ * stretches pinned to one bone (the iliotibial tract along the femur; PathSolver.tuneWeights). Keys sit on a lattice over some of the rig's joints (each `step` degrees from its rest angle,
  * plus its range's ends); between lattice points the adjustments blend multilinearly, a lattice point
  * without a key counting as no adjustment. So a key reaches as far as the next lattice point in each
  * direction, fading linearly, and poses away from every key are exactly as solved.
