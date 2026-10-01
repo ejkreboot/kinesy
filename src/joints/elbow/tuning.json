@@ -1,0 +1,13 @@
+{
+	"lattice": [
+		{
+			"joint": "flexion",
+			"step": 30
+		},
+		{
+			"joint": "pronation",
+			"step": 30
+		}
+	],
+	"keys": {}
+}
