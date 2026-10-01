@@ -19,14 +19,18 @@
  *   - Clearance: the half-thickness from bone and from the muscles beneath, but never more than the
  *     band had at rest, and none at the attachments.
  *
- * Limits: in a gap narrower than the clearance (a joint space) the band is squeezed, not routed; a
- * muscle's thickness is one number (the median over its mesh), not measured toward each obstacle.
+ * In a gap between two bones narrower than twice the clearance (under the acromion as the arm rises,
+ * a joint space) the band keeps to the middle of the gap, squeezed, rather than being pushed out of its
+ * side, where it hooked round the acromion's edge and stayed hooked.
+ *
+ * Limits: a muscle's thickness is one number (the median over its mesh), not measured toward each
+ * obstacle.
  */
 import { Deformer } from '../../src/core/deformer';
 import { qRotate, type Rigid, type Vec3 } from '../../src/core/math';
 import { vertexNormals } from '../../src/core/muscle/bind';
 import type { PathSolver } from '../../src/core/muscle/path';
-import type { PathPoint } from '../../src/core/muscle/schema';
+import type { JointPaths, PathPoint } from '../../src/core/muscle/schema';
 import { MuscleSystem } from '../../src/core/muscle/system';
 import type { Pose } from '../../src/core/rig';
 import { sdfGradient, sdfSample, SDF_FAR } from '../../src/core/sdf';
@@ -46,6 +50,8 @@ const END_RAMP = 8;
 const PUSH = 1.5;
 /** A muscle counts as touching another where this many of its vertices lie within CONTACT mm of the other's. */
 const CONTACT = 2, CONTACT_COUNT = 30;
+/** Two bones face each other across a gap where their outward directions are at least this far opposed (−cos). */
+const GAP_FACING = 0.3;
 /** Cell size of the vertex hash for muscle obstacles, mm. */
 const CELL = 6;
 
@@ -61,12 +67,13 @@ export interface RouteContext {
 	surfaces: Surfaces;
 }
 
-export function routeContext(J: LoadedJoint): RouteContext {
+/** Routing context for a joint; `paths` (default the joint's) drive the muscles that are obstacles. */
+export function routeContext(J: LoadedJoint, paths: JointPaths = J.spec.paths): RouteContext {
 	const solid = new Set(J.spec.solid ?? []);
 	const ctx = {
 		J,
 		fields: J.assets.fields.map((g, b) => (g && solid.has(J.manifest.bones[b]) ? solidField(g) : g)),
-		system: new MuscleSystem(J.spec.paths, J.assets, J.rig),
+		system: new MuscleSystem(paths, J.assets, J.rig),
 		deformer: new Deformer(J.assets, J.rig),
 		restPose: Object.fromEntries(J.rig.def.joints.map((j) => [j.id, j.restAngle]))
 	} as RouteContext;
@@ -130,10 +137,25 @@ export function musclesBeneath(ctx: RouteContext, mesh: string): string[] {
 	return out;
 }
 
+/** Those of `candidates` that `mesh` touches at rest (CONTACT_COUNT of its vertices within CONTACT mm of theirs). */
+export function touching(ctx: { J: LoadedJoint }, mesh: string, candidates: string[]): string[] {
+	const { assets } = ctx.J, A = assets.muscles.find((m) => m.name === mesh)!, hashA = VertexHash.of(A.rest, CELL);
+	return candidates.filter((name) => {
+		const B = assets.muscles.find((m) => m.name === name)!;
+		let touch = 0;
+		for (let i = 0; i < B.nv && touch < CONTACT_COUNT; i++) if (hashA.nearest([B.rest[i * 3], B.rest[i * 3 + 1], B.rest[i * 3 + 2]], CONTACT) >= 0) touch++;
+		return touch >= CONTACT_COUNT;
+	});
+}
+
 /** Deformed surfaces of muscles at poses (positions, normals, vertex hash), cached by pose. */
 export class Surfaces {
 	private readonly cache = new Map<string, Map<string, { P: Float32Array; N: Float32Array; hash: VertexHash }>>();
 	constructor(private readonly ctx: RouteContext) {}
+
+	clear(): void {
+		this.cache.clear();
+	}
 
 	at(pose: Pose, meshes: string[]): Map<string, { P: Float32Array; N: Float32Array; hash: VertexHash }> {
 		const key = JSON.stringify(Object.entries(pose).map(([k, v]) => [k, Math.round(v * 1000) / 1000]));
@@ -173,14 +195,91 @@ export interface ReferenceOptions {
 	clear?: number;
 	/** muscles to keep off; default those beneath it (musclesBeneath) */
 	beneath?: string[];
+	/**
+	 * muscles it passes under (MusclePathDef.over names it): kept below their deep surface, never further
+	 * above it than at rest, rather than off whichever of their surfaces is nearest (deepSurface)
+	 */
+	under?: string[];
 }
 
-/** The reference of one strand (its fixed points in order), as a function of the pose. */
-export function makeReference(ctx: RouteContext, mesh: string, fixed: PathPoint[], opts: ReferenceOptions = {}): (pose: Pose) => Band {
+/** Cell size of the coarse hash a deep surface is searched with (UNDER_REACH is far for CELL), mm. */
+const FAR_CELL = 12;
+
+/** Within this distance of a muscle's deep surface a band passing under the muscle is held below it, mm. */
+const UNDER_REACH = 25;
+
+/**
+ * A muscle's deep surface at rest: the vertices whose normal faces the nearest bone (against that bone's
+ * outward direction), and which of them lie at its edge (next to a vertex facing away). A band passing
+ * under the muscle is held on the bone side of the deep surface, except beyond its edges, where it may
+ * lie beside the muscle.
+ */
+export function deepSurface(ctx: RouteContext, mesh: string): { deep: Uint8Array; edge: Uint8Array; idx: Int32Array } {
+	const m = ctx.J.assets.muscles.find((x) => x.name === mesh)!, R = m.rest, N = vertexNormals(R, m.index, m.nv);
+	const deep = new Uint8Array(m.nv), edge = new Uint8Array(m.nv);
+	for (let v = 0; v < m.nv; v++) {
+		let best = SDF_FAR, g: Vec3 | null = null;
+		ctx.fields.forEach((f) => {
+			if (!f) return;
+			const d = sdfSample(f, R[v * 3], R[v * 3 + 1], R[v * 3 + 2]);
+			if (d < best) { best = d; g = sdfGradient(f, R[v * 3], R[v * 3 + 1], R[v * 3 + 2]) as Vec3 | null; }
+		});
+		const gv = g as Vec3 | null;
+		if (gv && N[v * 3] * gv[0] + N[v * 3 + 1] * gv[1] + N[v * 3 + 2] * gv[2] < 0) deep[v] = 1;
+	}
+	const I = m.index;
+	for (let f = 0; f < I.length; f += 3)
+		for (let a = 0; a < 3; a++)
+			for (let b = 0; b < 3; b++) if (deep[I[f + a]] && !deep[I[f + b]]) edge[I[f + a]] = 1;
+	return { deep, edge, idx: Int32Array.from({ length: m.nv }, (_, v) => v).filter((v) => deep[v]) };
+}
+
+/**
+ * The elastic band of one strand (its fixed points in order), in pieces a walk can be built from: the
+ * relaxed band at rest, a step that carries a band from one set of bone transforms to the next (each
+ * stretch's fixed ends exactly, its inner points by blending the motions of those two bones), and the
+ * relaxation that shortens it and pushes it out of every obstacle. A band is a list of stretches, one
+ * per pair of neighbouring fixed points, sharing their end points.
+ */
+export interface BandModel {
+	/** bone index of each fixed point */
+	bones: number[];
+	/** clearance from obstacles, mm */
+	clear: number;
+	/** muscles kept off */
+	beneath: string[];
+	/** muscles kept below (ReferenceOptions.under) */
+	under: string[];
+	/** the relaxed band at rest (copy before changing) */
+	rest: number[][][];
+	carry(bands: number[][][], from: Rigid[], to: Rigid[]): number[][][];
+	/** `muscles` false: off the bones only (cheaper: the muscles beneath needn't be deformed for the pose) */
+	relax(bands: number[][][], bones: Rigid[], pose: Pose, passes: number, muscles?: boolean): void;
+	/** the band's points, length and contacts at `bones` / `pose` */
+	finish(bands: number[][][], bones: Rigid[], pose: Pose): Band;
+}
+
+export function bandModel(ctx: RouteContext, mesh: string, fixed: PathPoint[], opts: ReferenceOptions = {}): BandModel {
 	const { J } = ctx, bi = (n: string) => J.manifest.bones.indexOf(n);
 	const clear = opts.clear ?? halfThickness(ctx, mesh);
-	const beneath = opts.beneath ?? musclesBeneath(ctx, mesh);
+	const beneath = opts.beneath ?? musclesBeneath(ctx, mesh), under = opts.under ?? [], obstacles = [...beneath, ...under];
 	const surfaces = ctx.surfaces;
+	const deepOf = new Map(under.map((m) => [m, deepSurface(ctx, m)]));
+	// per deformed surface, a hash of its deep-surface vertices
+	const deepHashes = new WeakMap<object, VertexHash>();
+	const deepHash = (m: string, S: { P: Float32Array }) => {
+		let h = deepHashes.get(S);
+		if (!h) deepHashes.set(S, (h = VertexHash.subset(S.P, deepOf.get(m)!.idx, FAR_CELL)));
+		return h;
+	};
+
+	/** the band point's height below m's deep surface (nearest deep vertex, along its normal), or null where it isn't over it */
+	const below = (m: string, S: { P: Float32Array; N: Float32Array }, x: number[]): { s: number; v: number } | null => {
+		const v = deepHash(m, S).nearest(x, UNDER_REACH);
+		if (v < 0 || deepOf.get(m)!.edge[v]) return null;
+		return { s: (x[0] - S.P[v * 3]) * S.N[v * 3] + (x[1] - S.P[v * 3 + 1]) * S.N[v * 3 + 1] + (x[2] - S.P[v * 3 + 2]) * S.N[v * 3 + 2], v };
+	};
+	let needUnder: Map<string, Float64Array> | null = null;
 	const world = (b: Rigid, p: ArrayLike<number>): number[] => { const r = qRotate(b.q, [p[0], p[1], p[2]]); return [r[0] + b.t[0], r[1] + b.t[1], r[2] + b.t[2]]; };
 	const flat = (bands: number[][][]) => bands.flatMap((X, k) => (k ? X.slice(1) : X));
 	// clearance per band point: ramped from none at the strand's ends; from each muscle, capped at rest
@@ -191,25 +290,40 @@ export function makeReference(ctx: RouteContext, mesh: string, fixed: PathPoint[
 		const L = arc[arc.length - 1];
 		return arc.map((a) => Math.min(1, Math.min(a, L - a) / END_RAMP));
 	};
-	function relax(bands: number[][][], bones: Rigid[], pose: Pose, passes: number) {
-		const surf = beneath.length && needMuscle ? surfaces.at(pose, beneath) : null;
+	const near: { d: number; w: Vec3; need: number }[] = [];
+	function relax(bands: number[][][], bones: Rigid[], pose: Pose, passes: number, muscles = true) {
+		const surf = muscles && obstacles.length && needMuscle ? surfaces.at(pose, obstacles) : null;
 		for (let it = 0; it < passes; it++) {
 			const r = ramp(bands);
-			let idx = 0;
-			bands.forEach((X, k) => {
+			// index into the flattened band (neighbouring stretches share their end point)
+			let off = 0;
+			bands.forEach((X) => {
 				for (let j = 1; j < X.length - 1; j++) for (let c = 0; c < 3; c++) X[j][c] += 0.5 * ((X[j - 1][c] + X[j + 1][c]) / 2 - X[j][c]);
-				for (let j = 0; j < X.length; j++, idx++) {
-					if ((k && j === 0) || j === 0 || j === X.length - 1) continue;
-					const x = X[j], need = clear * r[idx];
+				for (let j = 1; j < X.length - 1; j++) {
+					const idx = off + j, x = X[j], need = clear * r[idx];
+					// the bones within the clearance, and their outward directions
+					near.length = 0;
 					ctx.fields.forEach((g, b) => {
 						if (!g) return;
 						const l = boneLocal(bones[b], x[0], x[1], x[2]), d = sdfSample(g, l[0], l[1], l[2]);
 						if (d >= need || d >= SDF_FAR - 1) return;
 						const gr = sdfGradient(g, l[0], l[1], l[2]);
-						if (!gr) return;
-						const w = qRotate(bones[b].q, gr), s = Math.min(PUSH, need - d);
-						for (let c = 0; c < 3; c++) x[c] += w[c] * s;
+						if (gr) near.push({ d, w: qRotate(bones[b].q, gr), need });
 					});
+					// in a gap between two bones narrower than twice the clearance, each only to the gap's middle: the
+					// band is squeezed there (a tendon under the acromion), not pushed out of the gap's side
+					for (let a = 0; a < near.length; a++)
+						for (let b = a + 1; b < near.length; b++) {
+							const A = near[a], B = near[b];
+							if (A.w[0] * B.w[0] + A.w[1] * B.w[1] + A.w[2] * B.w[2] > -GAP_FACING) continue;
+							const mid = (A.d + B.d) / 2;
+							A.need = Math.min(A.need, mid);
+							B.need = Math.min(B.need, mid);
+						}
+					for (const o of near) {
+						const s = Math.min(PUSH, o.need - o.d);
+						if (s > 0) for (let c = 0; c < 3; c++) x[c] += o.w[c] * s;
+					}
 					if (surf) for (const m of beneath) {
 						const S = surf.get(m)!, nm = Math.min(need, needMuscle!.get(m)![idx]);
 						const v = S.hash.nearest(x, nm + CELL);
@@ -220,7 +334,14 @@ export function makeReference(ctx: RouteContext, mesh: string, fixed: PathPoint[
 						const s = Math.min(PUSH, nm - sd);
 						for (let c = 0; c < 3; c++) x[c] += n[c] * s;
 					}
+					if (surf) for (const m of under) {
+						const S = surf.get(m)!, b = below(m, S, x), nu = Math.min(need, needUnder!.get(m)![idx]);
+						if (!b || b.s >= nu) continue;
+						const s = Math.min(PUSH, nu - b.s);
+						for (let c = 0; c < 3; c++) x[c] += S.N[b.v * 3 + c] * s;
+					}
 				}
+				off += X.length - 1;
 			});
 		}
 	}
@@ -242,29 +363,29 @@ export function makeReference(ctx: RouteContext, mesh: string, fixed: PathPoint[
 				return Math.max(0, Math.min(clear, sd));
 			})];
 		}));
-		relax(rest, W0, ctx.restPose, 200);
 	}
-	return (pose: Pose): Band => {
-		const target = J.rig.clamp(pose);
-		const steps = Math.max(1, Math.ceil(Math.max(0, ...Object.keys(target).map((k) => Math.abs(target[k] - ctx.restPose[k]))) / STEP));
-		let W = W0, bands = rest.map((X) => X.map((x) => [...x])), q: Pose = ctx.restPose;
-		for (let s = 1; s <= steps; s++) {
-			q = {};
-			for (const id in ctx.restPose) q[id] = ctx.restPose[id] + (target[id] - ctx.restPose[id]) * (s / steps);
-			q = J.rig.clamp(q);
-			const Wn = J.rig.solve(q);
-			bands = bands.map((X, k) => {
-				const ba = bi(fixed[k].bone), bb = bi(fixed[k + 1].bone);
-				return X.map((x, j) => {
-					if (j === 0) return world(Wn[ba], fixed[k].p);
-					if (j === X.length - 1) return world(Wn[bb], fixed[k + 1].p);
-					const u = j / (X.length - 1), pa = world(Wn[ba], boneLocal(W[ba], x[0], x[1], x[2])), pb = world(Wn[bb], boneLocal(W[bb], x[0], x[1], x[2]));
-					return pa.map((v, c) => v + (pb[c] - v) * u);
-				});
+	if (under.length) {
+		// held below each at least as far as at rest (up to the clearance); where the band lay beside the
+		// muscle at rest, by the whole clearance once it comes over it
+		const surf = surfaces.at(ctx.restPose, under), pts = flat(rest);
+		needUnder = new Map(under.map((m) => [m, Float64Array.from(pts, (x) => {
+			const b = below(m, surf.get(m)!, x);
+			return b ? Math.min(clear, b.s) : clear;
+		})]));
+		needMuscle ??= new Map();
+	}
+	if (obstacles.length) relax(rest, W0, ctx.restPose, 200);
+	const carry = (bands: number[][][], W: Rigid[], Wn: Rigid[]) =>
+		bands.map((X, k) => {
+			const ba = bi(fixed[k].bone), bb = bi(fixed[k + 1].bone);
+			return X.map((x, j) => {
+				if (j === 0) return world(Wn[ba], fixed[k].p);
+				if (j === X.length - 1) return world(Wn[bb], fixed[k + 1].p);
+				const u = j / (X.length - 1), pa = world(Wn[ba], boneLocal(W[ba], x[0], x[1], x[2])), pb = world(Wn[bb], boneLocal(W[bb], x[0], x[1], x[2]));
+				return pa.map((v, c) => v + (pb[c] - v) * u);
 			});
-			relax(bands, Wn, q, s === steps ? PASSES[1] : PASSES[0]);
-			W = Wn;
-		}
+		});
+	const finish = (bands: number[][][], W: Rigid[], q: Pose): Band => {
 		const pts = flat(bands), contacts: Band['contacts'] = [];
 		const surf = beneath.length ? surfaces.at(q, beneath) : null;
 		for (const x of pts) {
@@ -278,6 +399,37 @@ export function makeReference(ctx: RouteContext, mesh: string, fixed: PathPoint[
 		let length = 0;
 		for (let j = 1; j < pts.length; j++) length += Math.hypot(pts[j][0] - pts[j - 1][0], pts[j][1] - pts[j - 1][1], pts[j][2] - pts[j - 1][2]);
 		return { pts, length, contacts };
+	};
+	return { bones: fixed.map((f) => bi(f.bone)), clear, beneath, under, rest, carry, relax, finish };
+}
+
+/**
+ * Walk a band from pose `from` (its bones `W`) to pose `to` in steps of at most STEP degrees per joint,
+ * relaxing PASSES[0] times after each step (off the muscles beneath too, unless `muscles` is false);
+ * returns the band and the bones at `to`.
+ */
+export function walkBand(ctx: RouteContext, model: BandModel, bands: number[][][], from: Pose, to: Pose, W: Rigid[], muscles = true): { bands: number[][][]; bones: Rigid[] } {
+	const { rig } = ctx.J, ids = Object.keys(ctx.restPose);
+	const steps = Math.max(1, Math.ceil(Math.max(0, ...ids.map((k) => Math.abs((to[k] ?? from[k]) - from[k]))) / STEP));
+	for (let s = 1; s <= steps; s++) {
+		const q: Pose = {};
+		for (const id of ids) q[id] = from[id] + ((to[id] ?? from[id]) - from[id]) * (s / steps);
+		const Wn = rig.solve(rig.clamp(q));
+		bands = model.carry(bands, W, Wn);
+		model.relax(bands, Wn, rig.clamp(q), PASSES[0], muscles);
+		W = Wn;
+	}
+	return { bands, bones: W };
+}
+
+/** The reference of one strand (its fixed points in order), as a function of the pose. */
+export function makeReference(ctx: RouteContext, mesh: string, fixed: PathPoint[], opts: ReferenceOptions = {}): (pose: Pose) => Band {
+	const model = bandModel(ctx, mesh, fixed, opts), { rig } = ctx.J;
+	return (pose: Pose): Band => {
+		const target = rig.clamp(pose);
+		const { bands, bones } = walkBand(ctx, model, model.rest.map((X) => X.map((x) => [...x])), ctx.restPose, target, rig.solve(ctx.restPose));
+		model.relax(bands, bones, target, PASSES[1] - PASSES[0]);
+		return model.finish(bands, bones, target);
 	};
 }
 
@@ -306,6 +458,16 @@ function distToPolyline(px: number, py: number, pz: number, P: number[][]): numb
 /** Uniform-grid hash of points for nearest-point queries within a radius. */
 class VertexHash {
 	private constructor(private readonly P: ArrayLike<number>, private readonly cell: number, private readonly map: Map<string, number[]>) {}
+
+	/** A hash of only the points `idx` (indices into P). */
+	static subset(P: ArrayLike<number>, idx: ArrayLike<number>, cell: number): VertexHash {
+		const map = new Map<string, number[]>();
+		for (let k = 0; k < idx.length; k++) {
+			const i = idx[k], key = `${Math.floor(P[i * 3] / cell)},${Math.floor(P[i * 3 + 1] / cell)},${Math.floor(P[i * 3 + 2] / cell)}`;
+			(map.get(key) ?? map.set(key, []).get(key)!).push(i);
+		}
+		return new VertexHash(P, cell, map);
+	}
 
 	static of(P: ArrayLike<number>, cell: number): VertexHash {
 		const map = new Map<string, number[]>();

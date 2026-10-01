@@ -1,0 +1,226 @@
+{
+	"lattice": [
+		{
+			"joint": "flexion",
+			"step": 30
+		},
+		{
+			"joint": "abduction",
+			"step": 30
+		},
+		{
+			"joint": "rotation",
+			"step": 30
+		}
+	],
+	"keys": {
+		"pec_clav": [
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 70,
+					"rotation": 0
+				},
+				"roll": -2,
+				"lift": 0,
+				"shift": -8,
+				"length": 1.03
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 100,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -4.5,
+				"shift": -15,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 130,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -18.5,
+				"shift": -6.5,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 160,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -17,
+				"shift": -2.5,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 180,
+					"rotation": 0
+				},
+				"roll": -54,
+				"lift": -13.5,
+				"shift": -1.5,
+				"length": 1.02
+			},
+			{
+				"pose": {
+					"flexion": 60,
+					"abduction": 10,
+					"rotation": 0
+				},
+				"roll": -3,
+				"lift": -10,
+				"shift": -8.5,
+				"length": 0.99
+			},
+			{
+				"pose": {
+					"flexion": 90,
+					"abduction": 10,
+					"rotation": 0
+				},
+				"roll": 23,
+				"lift": -9.5,
+				"shift": -0.5,
+				"length": 1.02
+			},
+			{
+				"pose": {
+					"flexion": 120,
+					"abduction": 10,
+					"rotation": 0
+				},
+				"roll": 55,
+				"lift": 0,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 150,
+					"abduction": 10,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -7.5,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 180,
+					"abduction": 10,
+					"rotation": 0
+				},
+				"roll": 7,
+				"lift": -11.5,
+				"shift": 0,
+				"length": 1
+			}
+		],
+		"deltoid_ant": [
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 70,
+					"rotation": 0
+				},
+				"roll": -9,
+				"lift": -1,
+				"shift": -1.5,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 100,
+					"rotation": 0
+				},
+				"roll": 29,
+				"lift": 1.5,
+				"shift": -16,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 130,
+					"rotation": 0
+				},
+				"roll": 29,
+				"lift": 0,
+				"shift": 0,
+				"length": 1
+			}
+		],
+		"deltoid_mid": [
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 130,
+					"rotation": 0
+				},
+				"roll": 9,
+				"lift": -3.5,
+				"shift": 0,
+				"length": 1.29
+			},
+			{
+				"pose": {
+					"flexion": 0,
+					"abduction": 160,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -1.5,
+				"shift": 0,
+				"length": 1.26
+			}
+		],
+		"pec_stern": [
+			{
+				"pose": {
+					"flexion": 60,
+					"abduction": 70,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -4.5,
+				"shift": 15.5,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 90,
+					"abduction": 70,
+					"rotation": 0
+				},
+				"roll": -29,
+				"lift": -6,
+				"shift": 18.5,
+				"length": 1.26
+			}
+		],
+		"pec_abd": [
+			{
+				"pose": {
+					"flexion": 60,
+					"abduction": 70,
+					"rotation": 0
+				},
+				"roll": -2,
+				"lift": -11,
+				"shift": -4,
+				"length": 1.18
+			}
+		]
+	}
+}

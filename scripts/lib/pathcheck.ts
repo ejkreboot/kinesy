@@ -2,11 +2,13 @@
  * Shared by the path tools (validate-paths, draft-paths): joint registry, asset loading, and the
  * checks a path-driven muscle is judged by.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { decodeJointAssets, isGzip } from '../../src/core/assets';
 import { Deformer } from '../../src/core/deformer';
+import { decodeBaked } from '../../src/core/muscle/baked';
+import { decodeCorrections } from '../../src/core/muscle/correct';
 import { qRotate, type Rigid } from '../../src/core/math';
 import type { PathSolver } from '../../src/core/muscle/path';
 import type { JointPaths } from '../../src/core/muscle/schema';
@@ -18,6 +20,7 @@ import { elbowPaths } from '../../src/joints/elbow/paths';
 import { elbowRig } from '../../src/joints/elbow/rig';
 import { shoulderPaths } from '../../src/joints/shoulder/paths';
 import { shoulderRig } from '../../src/joints/shoulder/rig';
+import type { BakeAxisSpec } from './bake';
 
 export interface JointSpec {
 	rig: RigDef;
@@ -28,6 +31,8 @@ export interface JointSpec {
 	sweeps: { joint: string; at: Pose[] }[];
 	/** bones whose fields are hollow shells (the rib cage), filled for routing (solid.ts) */
 	solid?: string[];
+	/** the grid baked lines of action are solved on (lib/bake.ts) */
+	bake?: BakeAxisSpec[];
 }
 
 export const JOINTS: Record<string, JointSpec> = {
@@ -56,11 +61,20 @@ export const JOINTS: Record<string, JointSpec> = {
 			{ joint: 'protraction', at: [{}] },
 			{ joint: 'elevation', at: [{}] }
 		],
-		solid: ['thorax']
+		solid: ['thorax'],
+		// the glenohumeral joint; the girdle's own sliders are carried (baked.ts)
+		bake: [{ joint: 'flexion', step: 10 }, { joint: 'abduction', step: 10 }, { joint: 'rotation', step: 10 }]
 	}
 };
 
+/** A joint's baked lines of action, next to its other assets. */
+export const BAKED = 'baked.bin.gz';
+/** A joint's mesh corrections, solved against that bake. */
+export const CORRECTIONS = 'corrections.bin.gz';
+
 export interface LoadedJoint {
+	/** its asset directory */
+	dir: string;
 	spec: JointSpec;
 	manifest: AssetManifest;
 	assets: JointAssets;
@@ -79,7 +93,9 @@ export function loadJoint(joint: string): LoadedJoint {
 	};
 	const manifest = JSON.parse(readFileSync(resolve(dir, 'manifest.json'), 'utf8')) as AssetManifest;
 	const assets = decodeJointAssets(manifest, bin('geometry.bin.gz'), bin('fields.bin.gz'));
-	return { spec, manifest, assets, rig: new Rig(spec.rig, manifest.axes, manifest.bones) };
+	if (existsSync(resolve(dir, BAKED))) assets.baked = decodeBaked(bin(BAKED));
+	if (existsSync(resolve(dir, CORRECTIONS))) assets.corrections = decodeCorrections(bin(CORRECTIONS));
+	return { spec, manifest, assets, rig: new Rig(spec.rig, manifest.axes, manifest.bones), dir };
 }
 
 /** World point into a bone's frame. */

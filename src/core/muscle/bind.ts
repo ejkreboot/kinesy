@@ -32,8 +32,9 @@ export interface BoundMesh {
 	nv: number;
 	/** depth order (MusclePathDef.layer) */
 	layer: number;
-	/** proxy capsules that push this mesh: the first this many (those of lower layers) */
+	/** proxy capsules that push this mesh: this many from capFirst (those of lower layers, or of the meshes it lies over) */
 	caps: number;
+	capFirst: number;
 	/** per vertex: s, blend, strand A, strand B (strand indices are the solver's) */
 	path: Float32Array;
 	/** per vertex: offset in the frame (x along the tangent) */
@@ -276,7 +277,7 @@ export function bindMesh(
 	const drape = new Float32Array(nv * 3);
 	if (def.drape) restDrape(path, offset, nv, drape);
 
-	return { name, muscle: mi, nv, layer: def.layer, caps: 0, path, offset, normal, weights, clear, colliders, profile, window, drape };
+	return { name, muscle: mi, nv, layer: def.layer, caps: 0, capFirst: 0, path, offset, normal, weights, clear, colliders, profile, window, drape };
 }
 
 /**
@@ -291,10 +292,15 @@ const WINDOW_SHARE = 0.15;
 /** Slices along a strand the rest drape is measured in, and smoothing passes over them. */
 const DRAPE_BINS = 24, DRAPE_SMOOTH = 3;
 
+/** Ratio of a slice's width to its thickness (spread along its principal axes) over which its drape is taken across its thickness only. */
+const DRAPE_FLAT: [number, number] = [1.5, 3];
+
 /**
  * The belly's rest drape (into `out`, per vertex, in the frame): per strand (pair) and slice along it,
  * the median offset of its vertices across the strand, smoothed from slice to slice and interpolated to
- * each vertex's place along it.
+ * each vertex's place along it. Of a flat slice's offset only the part across its thickness counts: the
+ * part along its width is where the sheet lies beside its strand, which it keeps (relaxed, the anterior
+ * deltoid, its strand along the medial edge of its origin, slid medially into the pectoralis major).
  */
 function restDrape(path: Float32Array, offset: Float32Array, nv: number, out: Float32Array): void {
 	const groups = new Map<number, number[][][]>();
@@ -307,7 +313,22 @@ function restDrape(path: Float32Array, offset: Float32Array, nv: number, out: Fl
 	const table = new Map<number, Float64Array>();
 	for (const [a, g] of groups) {
 		let t = new Float64Array(DRAPE_BINS * 2);
-		g.forEach((vs, k) => { t[k * 2] = med(vs.map((o) => o[0])); t[k * 2 + 1] = med(vs.map((o) => o[1])); });
+		g.forEach((vs, k) => {
+			let my = med(vs.map((o) => o[0])), mz = med(vs.map((o) => o[1]));
+			// the slice's width direction (major axis of its spread) and how flat it is
+			const n = Math.max(1, vs.length), cy = vs.reduce((a, o) => a + o[0], 0) / n, cz = vs.reduce((a, o) => a + o[1], 0) / n;
+			let syy = 0, syz = 0, szz = 0;
+			for (const o of vs) { syy += (o[0] - cy) ** 2; syz += (o[0] - cy) * (o[1] - cz); szz += (o[1] - cz) ** 2; }
+			const tr = (syy + szz) / 2, dt = Math.sqrt(((syy - szz) / 2) ** 2 + syz * syz), l1 = tr + dt, l2 = Math.max(1e-9, tr - dt);
+			if (vs.length >= 3 && l1 > 1e-9) {
+				const th = 0.5 * Math.atan2(2 * syz, syy - szz), wy = Math.cos(th), wz = Math.sin(th);
+				const along = (my * wy + mz * wz) * smoothstep(DRAPE_FLAT[0], DRAPE_FLAT[1], Math.sqrt(l1 / l2));
+				my -= along * wy;
+				mz -= along * wz;
+			}
+			t[k * 2] = my;
+			t[k * 2 + 1] = mz;
+		});
 		for (let it = 0; it < DRAPE_SMOOTH; it++) {
 			const c = t.slice();
 			for (let k = 0; k < DRAPE_BINS; k++) for (let j = 0; j < 2; j++) t[k * 2 + j] = 0.5 * c[k * 2 + j] + 0.25 * (c[Math.max(0, k - 1) * 2 + j] + c[Math.min(DRAPE_BINS - 1, k + 1) * 2 + j]);
@@ -369,14 +390,14 @@ function attachWeights(
 }
 
 /**
- * Record each vertex's rest clearance from the proxy capsules that push it (the first bound.caps;
- * capsules at the rest pose).
+ * Record each vertex's rest clearance from the proxy capsules that push it (bound.caps from
+ * bound.capFirst; capsules at the rest pose).
  */
 export function setProxyClearance(bound: BoundMesh, rest: Float32Array, capsules: CapsuleArray): void {
-	const g = [0, 0, 0], n = bound.caps;
+	const g = [0, 0, 0], n = bound.capFirst + bound.caps;
 	for (let v = 0; v < bound.nv; v++) {
 		let d = SDF_FAR;
-		for (let k = 0; k < n; k++) d = Math.min(d, capsuleDistance(capsules, k * 8, rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2], g));
+		for (let k = bound.capFirst; k < n; k++) d = Math.min(d, capsuleDistance(capsules, k * 8, rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2], g));
 		bound.weights[v * 4 + 3] = d;
 	}
 }

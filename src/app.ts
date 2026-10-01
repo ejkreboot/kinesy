@@ -12,6 +12,9 @@ import { PoseAnimator } from './viewer/animator';
 import { benchDeformation } from './viewer/bench';
 import { JointModel } from './viewer/model';
 import { PathDebug } from './viewer/pathDebug';
+import { TunePanel } from './ui/tune';
+import { withBaked } from './core/muscle/baked';
+import { PathSolver } from './core/muscle/path';
 import { Stage } from './viewer/stage';
 
 export interface MountedJoint {
@@ -48,7 +51,10 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 	}
 	debug.msg('assets decoded');
 	const rig = new Rig(joint.rig, assets.manifest.axes, assets.manifest.bones);
-	const model = new JointModel(stage, assets, rig, joint.muscles, joint.deformer, joint.paths);
+	// ?baked: muscles with a current bake follow their baked lines of action rather than their wraps
+	const paths = joint.paths && assets.baked && new URLSearchParams(location.search).has('baked') ? withBaked(joint.paths, assets.baked) : joint.paths;
+	if (paths !== joint.paths) debug.msg(`baked: ${paths!.muscles.filter((m) => m.baked).map((m) => m.mesh).join(', ')}`);
+	const model = new JointModel(stage, assets, rig, joint.muscles, joint.deformer, paths);
 	model.onPosed = (ms) => debug.posed(ms);
 	for (const a of joint.axisOverlays) model.addAxis(a.joint, a.color, a.length, a.offset);
 	stage.setView(joint.view);
@@ -105,9 +111,14 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 	}
 	// #debug: muscle path overlay and deformation on/off
 	let pathDebug: PathDebug | null = null;
-	if (location.hash === '#debug' && model.muscleSystem && joint.paths) {
-		const pd = (pathDebug = new PathDebug(model.muscleSystem, joint.paths, assets.manifest.bones));
-		stage.scene.add(pd.group);
+	if (location.hash === '#debug' && model.muscleSystem && paths) {
+		// with a bake, its lines of action for the muscles still on wraps, to compare
+		const solver = model.muscleSystem.solver, baked = assets.baked;
+		const cmp = baked ? new PathSolver(withBaked(paths, baked), rig, assets.manifest.bones, {}, baked) : null;
+		const compare = cmp && cmp.strands.some((st, s) => st.baked && !solver.strands[s].baked) ? { solver: cmp, pose: () => model.pose } : null;
+		const colors = new Map(joint.muscles.flatMap((m) => m.meshes.map((mesh) => [mesh, m.color] as [string, string])));
+		const pd = (pathDebug = new PathDebug(model.muscleSystem, paths, assets.manifest.bones, compare, colors));
+		stage.scene.add(pd.group, pd.compareGroup);
 		model.posed.push(() => pd.update());
 		tools.append(
 			toggleButton('Paths', false, (on) => {
@@ -116,6 +127,32 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 			}),
 			toggleButton('Deform', true, (on) => model.setDeformation(on))
 		);
+		if (compare)
+			tools.append(
+				toggleButton('Baked', false, (on) => {
+					pd.setCompareVisible(on);
+					stage.requestRender();
+				})
+			);
+		// hand tuning: keys per muscle at lattice poses, live; saved to the joint's tuning.json
+		const tuner = model.muscleSystem.tuner;
+		if (tuner) {
+			const label = (mesh: string) => {
+				const m = joint.muscles.find((x) => x.meshes.includes(mesh));
+				return m ? (m.heads?.[mesh] ? `${m.name} (${m.heads[mesh]})` : m.name) : mesh;
+			};
+			const rest = Object.fromEntries(rig.def.joints.map((j) => [j.id, j.restAngle]));
+			const panel = new TunePanel(
+				tuner, model.muscleSystem.meshes.map((m) => ({ mesh: m.name, label: label(m.name) })), joint.id, rest,
+				() => model.pose,
+				(p) => { animator.cancel(); model.setPose(p); sync(); },
+				() => model.setPose({})
+			);
+			$('dbg').parentElement!.append(panel.el);
+			model.posed.push(() => { if (!panel.el.hidden) panel.refresh(); });
+			tools.append(toggleButton('Tune', false, (on) => { panel.el.hidden = !on; panel.refresh(); }));
+			window.addEventListener('beforeunload', (e) => { if (panel.unsaved) e.preventDefault(); }, { signal: teardown.signal });
+		}
 	}
 
 	const byKey = new Map<string, MuscleInfo>(joint.muscles.map((m) => [m.key, m]));

@@ -10,6 +10,8 @@
  *   fields:   per bone, an int8 signed-distance grid (x fastest, then y, then z).
  */
 import type { Vec3 } from './math';
+import type { BakedPaths } from './muscle/baked';
+import type { Corrections } from './muscle/correct';
 
 export interface AxisDef {
 	/** A point on the axis, viewer frame. */
@@ -122,4 +124,8 @@ export interface JointAssets {
 	muscles: MuscleMesh[];
 	/** indexed by rig bone id; null where a bone has no field */
 	fields: (SdfGrid | null)[];
+	/** lines of action baked offline (muscle/baked.ts), for the joint's baked muscles */
+	baked?: BakedPaths;
+	/** mesh corrections solved offline against that bake (muscle/correct.ts) */
+	corrections?: Corrections;
 }

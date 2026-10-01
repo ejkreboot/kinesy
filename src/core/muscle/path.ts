@@ -15,6 +15,11 @@
  * the way, so the same pose always gives the same frames (no flip at ±180°, whatever the order
  * poses arrive in).
  *
+ * A muscle may instead be baked (MusclePathDef.baked): its strands are looked up for the pose from
+ * lines of action solved offline (baked.ts) rather than built from wraps; frames and everything after
+ * are the same. Hand-tuned keys (tune.ts), if set, adjust each step's strands last: the belly rolled,
+ * moved off its line, shortened.
+ *
  * Each step of the walk samples every strand, pushes apart strands of different layers where their
  * muscles meet (strandContact.ts), and only then builds the frames. Strands that end on another
  * muscle's strand (JoinPoint) come last: their insertion is a virtual bone, after the real ones,
@@ -24,7 +29,9 @@
  */
 import { qMul, qRotate, qToMat3, type Quat, type Rigid, type Vec3 } from '../math';
 import type { Pose, Rig } from '../rig';
-import { isJoin, isPoint, type JointPaths, type MusclePathDef, type RimSurface, type WrapSurface } from './schema';
+import { bakedPolyline, cellFor, gridPose, strandKey, type BakedPaths, type BakedStrand, type Cell } from './baked';
+import { bump, NO_TUNE, type Tuner, type TuneParams } from './tune';
+import { isJoin, isPoint, type JointPaths, type MusclePathDef, type PathPoint, type RimSurface, type WrapSurface } from './schema';
 import { resetContacts, resolveContacts, type ContactModel } from './strandContact';
 import { minimize1D, perpendicular, rimBlocked, rimPoint, rimRange, wrapCylinder, wrapEllipsoid, wrapEllipsoidAbout, type Rim } from './wrap';
 
@@ -107,6 +114,8 @@ export interface Strand {
 	 * sᵢ·L₀ + (L − L₀)·stretchᵢ, so where the weights are flat (tendon) spacing keeps its rest length
 	 */
 	stretch: Float64Array;
+	/** its baked line of action, for a baked muscle */
+	baked?: BakedStrand;
 }
 
 export interface MuscleEntry {
@@ -181,8 +190,22 @@ export class PathSolver {
 	private restRung: Float64Array;
 	/** per strand, per sample: the sample whose roll it takes (fixed at rest; -1: none) */
 	private rungAt: Int32Array;
+	/** hand tuning (setTuner), its adjustments per muscle at the current step, and per strand: the rest
+	 * direction away from the bone (an angle round the strand in its mid-belly frame; setOutward), the
+	 * share of the strand's rest length in its belly, its tendons' cumulative share of length change
+	 * (resample), and the length its belly gave up to them at the last step, mm */
+	private tuner: Tuner | null = null;
+	private tune: TuneParams[] = [];
+	private readonly outward: Float64Array;
+	private readonly bellyShare: Float64Array;
+	private tendons: (Float64Array | null)[] = [];
+	readonly extra: Float64Array;
+	/** baked lines of action, if any muscle is baked; and their grid cell and grid bones at the current step */
+	private readonly baked: BakedPaths | null = null;
+	private cell: Cell | null = null;
+	private gridBones: Rigid[] = [];
 
-	constructor(paths: JointPaths, rig: Rig, boneNames: string[], opts: Partial<PathOptions> = {}) {
+	constructor(paths: JointPaths, rig: Rig, boneNames: string[], opts: Partial<PathOptions> = {}, baked: BakedPaths | null = null) {
 		this.opts = { ...DEFAULT_PATH_OPTIONS, ...opts };
 		this.N = paths.samples ?? 48;
 		this.rig = rig;
@@ -237,11 +260,13 @@ export class PathSolver {
 				this.joined.push(isJoin(els[els.length - 1]));
 				this.strands.push({
 					muscle: mi, elements, originBone: boneIndex(first.bone, where), insertionBone: (elements[elements.length - 1] as { bone: number }).bone,
-					restLength: 0, t0: [0, 0, 0], r0: [0, 0, 0], tE: [0, 0, 0], rE: [0, 0, 0], twist, stretch: twist.slice()
+					restLength: 0, t0: [0, 0, 0], r0: [0, 0, 0], tE: [0, 0, 0], rE: [0, 0, 0], twist, stretch: twist.slice(),
+					baked: def.baked ? bakedStrand(baked, def.mesh, this.strands.length - this.muscles[mi].first, els, where) : undefined
 				});
 			}
 		}
 
+		if (this.strands.some((st) => st.baked)) this.baked = baked;
 		const S = this.strands.length, N = this.N;
 		this.pos = new Float64Array(S * N * 3);
 		this.quat = new Float64Array(S * N * 4);
@@ -252,6 +277,10 @@ export class PathSolver {
 		this.drape = new Float64Array(S).fill(1);
 		this.restRung = new Float64Array(S * N).fill(NaN);
 		this.rungAt = new Int32Array(S * N);
+		this.outward = new Float64Array(S).fill(NaN);
+		this.bellyShare = new Float64Array(S).fill(1);
+		this.extra = new Float64Array(S);
+		this.tendons = this.strands.map(() => null);
 		this.work = { poly: [], X: new Float64Array(N * 3), T: new Float64Array(N * 3), Rn: new Float64Array(N * 3), via: [] };
 		this.anchors = this.strands.map(() => [0, N - 1]);
 		this.walk = { r0: new Float64Array(S * 3), t0: new Float64Array(S * 3), rE: new Float64Array(S * 3), tE: new Float64Array(S * 3) };
@@ -265,6 +294,7 @@ export class PathSolver {
 
 		// rest pose: fix automatic wrap sides and the reference frames every later pose is measured against
 		this.bones = [...rig.solve(this.restPose), ...this.joins.map(() => ({ t: [0, 0, 0] as Vec3, q: [0, 0, 0, 1] as Quat }))];
+		this.bakedStep(this.restPose);
 		for (const st of this.strands) {
 			for (const e of st.elements) if (!e.point && e.side === 0) e.side = this.autoSide(st, e);
 			const w = this.work;
@@ -304,6 +334,13 @@ export class PathSolver {
 		this.drapes();
 	}
 
+	/** The grid cell and grid bones baked strands are looked up at for a step's pose. */
+	private bakedStep(pose: Pose): void {
+		if (!this.baked) return;
+		this.cell = cellFor(this.baked.axes, pose, this.cell ?? undefined);
+		this.gridBones = this.rig.solve(gridPose(this.baked.axes, pose, this.restPose));
+	}
+
 	/** Point and frame of strand s at `sigma` (samples) at the last solve or step. */
 	private strandPoint(s: number, sigma: number): { c: Vec3; q: Quat } {
 		const N = this.N, j = Math.min(N - 2, Math.max(0, Math.floor(sigma))), u = sigma - j, P = this.pos, Q = this.quat;
@@ -330,8 +367,24 @@ export class PathSolver {
 
 	/** Replace a strand's length-change distribution (cumulative, 0 → 1 over its samples). */
 	setStretchWeights(strand: number, w: ArrayLike<number>): void {
-		const t = this.strands[strand].stretch;
-		for (let i = 0; i < this.N; i++) t[i] = w[i];
+		const t = this.strands[strand].stretch, N = this.N;
+		for (let i = 0; i < N; i++) t[i] = w[i];
+		// the tendons: where a sample takes less than an even share of length change; their cumulative share
+		const u = 1 / (N - 1), raw = new Float64Array(N);
+		let sum = 0;
+		for (let i = 1; i < N; i++) { const d = Math.max(0, u - (t[i] - t[i - 1])); raw[i] = raw[i - 1] + d; sum += d; }
+		this.bellyShare[strand] = Math.max(0, 1 - sum);
+		this.tendons[strand] = sum > 1e-6 ? raw.map((x) => x / sum) : null;
+	}
+
+	/** Hand tuning to apply (null: none); re-solves the last pose's rest. */
+	setTuner(t: Tuner | null): void {
+		this.tuner = t;
+	}
+
+	/** A strand's rest direction away from its bone, as an angle round it in its mid-belly frame (from the normal toward the binormal). */
+	setOutward(strand: number, angle: number): void {
+		this.outward[strand] = angle;
 	}
 
 	/**
@@ -366,10 +419,15 @@ export class PathSolver {
 			const u = k / K, p: Pose = {};
 			for (const id in this.restPose) p[id] = this.restPose[id] + ((pose[id] ?? this.restPose[id]) - this.restPose[id]) * u;
 			const bones = this.rig.solve(p), S = this.strands.length;
+			this.bakedStep(p);
+			this.tune = this.muscles.map((m) => (this.tuner ? this.tuner.at(m.def.mesh, p) : NO_TUNE));
 			for (let s = 0; s < S; s++) if (!this.joined[s]) this.sample(this.strands[s], bones, s);
+			// before contact, which sizes a draped mesh by how far its drape has relaxed
+			this.drapes(bones);
 			if (this.contact) resolveContacts(this, this.contact, bones, this.anchors);
 			for (let s = 0; s < S; s++) if (!this.joined[s]) this.strandFrames(this.strands[s], bones, s);
 			this.rollSheets();
+			if (this.tuner) this.applyTuning();
 			// virtual bones: each join carried by its strand's motion since rest (identity at rest)
 			for (const j of this.joins) {
 				if (j.sigma < 0) {
@@ -390,7 +448,6 @@ export class PathSolver {
 		if (this.restGaps) {
 			const g = this.gaps();
 			for (let k = 0; k < g.length; k++) this.spacing[k] = g[k] / this.restGaps[k];
-			this.drapes();
 		}
 	}
 
@@ -485,14 +542,14 @@ export class PathSolver {
 	/**
 	 * Each draped strand's share of its rest drape kept (MusclePathDef.drape): from 1 at rest down to the
 	 * muscle's share as its end-to-end direction, taken in its origin bone's frame, turns from its rest
-	 * direction by the muscle's angle.
+	 * direction by the muscle's angle. Its ends are fixed points, so this depends on the pose alone.
 	 */
-	private drapes(): void {
+	private drapes(bones: Rigid[] = this.bones): void {
 		const N = this.N, P = this.pos;
 		this.strands.forEach((st, s) => {
 			const d = this.muscles[st.muscle].def.drape;
 			if (!d) return;
-			const a = s * N * 3, b = (s * N + N - 1) * 3, q = this.bones[st.originBone].q;
+			const a = s * N * 3, b = (s * N + N - 1) * 3, q = bones[st.originBone].q;
 			const dir = unit(qRotate([-q[0], -q[1], -q[2], q[3]], [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]]));
 			if (!this.restChord[s]) this.restChord[s] = dir;
 			const turn = Math.acos(Math.min(1, Math.max(-1, dot(dir, this.restChord[s]!)))) * (180 / Math.PI);
@@ -510,6 +567,35 @@ export class PathSolver {
 				out[s * N + i] = Math.max(1e-6, i === 0 ? dist(o, o + 3) : i === N - 1 ? dist(o - 3, o) : dist(o - 3, o + 3) / 2);
 			}
 		return out;
+	}
+
+	/**
+	 * Hand-tuned adjustments at the current step (tune.ts), after the frames: each sample moved off the line
+	 * by lift (along the strand's rest direction away from the bone, carried in its frame) and shift (across
+	 * that), then its frame rolled about the line; both scaled by bump(s), so the attachments stay put.
+	 */
+	private applyTuning(): void {
+		const N = this.N, P = this.pos, Q = this.quat;
+		this.strands.forEach((st, s) => {
+			const t = this.tune[st.muscle];
+			if (!t || (t.roll === 0 && t.lift === 0 && t.shift === 0)) return;
+			const th = Number.isNaN(this.outward[s]) ? 0 : this.outward[s], co = Math.cos(th), si = Math.sin(th);
+			for (let i = 0; i < N; i++) {
+				const b = bump(i / (N - 1));
+				if (b <= 0) continue;
+				const o = (s * N + i) * 4, q: Quat = [Q[o], Q[o + 1], Q[o + 2], Q[o + 3]];
+				if (t.lift !== 0 || t.shift !== 0) {
+					const out = qRotate(q, [0, co, si]), side = qRotate(q, [0, -si, co]), p = (s * N + i) * 3;
+					for (let c = 0; c < 3; c++) P[p + c] += b * (t.lift * out[c] - t.shift * side[c]);
+				}
+				if (t.roll !== 0) {
+					// about the frame's own tangent (its first axis)
+					const h = (t.roll * b * Math.PI) / 360, c = Math.cos(h), sn = Math.sin(h);
+					const [x, y, z, w] = q;
+					Q[o] = w * sn + x * c; Q[o + 1] = y * c + z * sn; Q[o + 2] = z * c - y * sn; Q[o + 3] = w * c - x * sn;
+				}
+			}
+		});
 	}
 
 	/**
@@ -650,7 +736,11 @@ export class PathSolver {
 			const b = bones[bone], v = qRotate(b.q, p);
 			return [v[0] + b.t[0], v[1] + b.t[1], v[2] + b.t[2]];
 		};
-		for (let k = 0; k < els.length; ) {
+		if (st.baked) {
+			bakedPolyline(st.baked, this.baked!.M, this.cell!, this.gridBones, bones, world(els[0]), world(els[els.length - 1]), poly);
+			for (let k = 1; k < els.length - 1; k++) w.via.push(...world(els[k]));
+		}
+		for (let k = 0; k < els.length && !st.baked; ) {
 			if (els[k].point) {
 				const x = world(els[k]);
 				poly.push(...x);
@@ -663,7 +753,11 @@ export class PathSolver {
 			this.wrapRun(els.slice(k, j) as WrapElement[], world(els[k - 1]), world(els[j]), bones, poly);
 			k = j;
 		}
-		resample(poly, this.N, w.X, st.restLength, st.stretch);
+		// a hand-tuned shorter belly gives that much of its length to the tendons (tune.ts)
+		const s = this.strands.indexOf(st), t = this.tune[st.muscle];
+		const E = t && t.length !== 1 && this.tendons[s] ? (1 - t.length) * st.restLength * this.bellyShare[s] : 0;
+		if (s >= 0) this.extra[s] = E;
+		resample(poly, this.N, w.X, st.restLength, st.stretch, E, this.tendons[s] ?? undefined);
 		smoothSamples(w.X, this.N, this.opts.smooth, w.T);
 		tangents(w.X, this.N, w.T);
 	}
@@ -815,7 +909,7 @@ export class PathSolver {
 		if (m.def.bulge === false) return 1;
 		const ref = this.muscles[m.lengthRef];
 		const s = ref.first + Math.min(k, ref.count - 1);
-		const ratio = this.length[s] / this.strands[s].restLength;
+		const ratio = (this.length[s] - this.extra[s]) / this.strands[s].restLength;
 		const belly = Math.max(0.3, 1 - (1 - ratio) / this.opts.bellyFrac);
 		return Math.min(this.opts.kMax, Math.max(this.opts.kMin, 1 / Math.sqrt(belly)));
 	}
@@ -838,6 +932,15 @@ function sub(a: ArrayLike<number>, b: ArrayLike<number>): Vec3 {
 function unit(v: ArrayLike<number>): Vec3 {
 	const l = Math.hypot(v[0], v[1], v[2]) || 1;
 	return [v[0] / l, v[1] / l, v[2] / l];
+}
+
+/** The baked line of action for a baked muscle's strand k, checked against its definition. */
+function bakedStrand(baked: BakedPaths | null, mesh: string, k: number, els: MusclePathDef['strands'][number], where: string): BakedStrand {
+	if (els.some((e) => !isPoint(e) || isJoin(e))) throw new Error(`${where}: a baked strand has points only (no wraps or joins)`);
+	const b = baked?.strands.find((s) => s.mesh === mesh && s.strand === k);
+	if (!b) throw new Error(`${where}: baked, but not in the joint's baked paths (run scripts/bake.ts)`);
+	if (b.key !== strandKey(els as PathPoint[])) throw new Error(`${where}: its points have changed since it was baked (run scripts/bake.ts)`);
+	return b;
 }
 
 export function wrapPi(a: number): number {
@@ -925,12 +1028,13 @@ export function polyLength(p: ArrayLike<number>): number {
  * Resample polyline `p` to n points by arc length: evenly spaced, or with a rest length `L0` and
  * cumulative `stretch` weights, point i at sᵢ·L₀ + (L − L₀)·stretchᵢ (see Strand.stretch).
  */
-export function resample(p: ArrayLike<number>, n: number, out: Float64Array, L0 = 0, stretch?: ArrayLike<number>): void {
+export function resample(p: ArrayLike<number>, n: number, out: Float64Array, L0 = 0, stretch?: ArrayLike<number>, extra = 0, tendons?: ArrayLike<number>): void {
 	const m = p.length / 3, L = polyLength(p);
 	let seg = 0, acc = 0, segLen = m > 1 ? Math.hypot(p[3] - p[0], p[4] - p[1], p[5] - p[2]) : 0, prev = 0;
 	for (let i = 0; i < n; i++) {
 		const si = i / (n - 1);
-		let target = L0 > 0 && stretch ? si * L0 + (L - L0) * stretch[i] : si * L;
+		// `extra` of the belly's length moved to the tendons (hand-tuned shortening), spread by `tendons`
+		let target = L0 > 0 && stretch ? si * L0 + (L - L0 - extra) * stretch[i] + (tendons ? extra * tendons[i] : 0) : si * L;
 		target = i === n - 1 ? L : Math.min(L, Math.max(target, i ? prev + 1e-4 : 0));
 		prev = target;
 		while (seg < m - 2 && acc + segLen < target) {

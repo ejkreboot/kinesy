@@ -1,11 +1,14 @@
 import type { JointPaths } from '../../core/muscle/schema';
+import type { Tuning } from '../../core/muscle/tune';
+import tuning from './tuning.json';
 
 /**
  * Lines of action for the shoulder muscles (rest pose: arm hanging about 10° from the side; x toward
  * the subject's left, y up, z anterior, mm; the humeral head's center near the origin). Ends found by
  * scripts/draft-paths.ts; via points only along fleshy attachments.
  */
-// Layers, deep to superficial: the rotator cuff on the scapula and the humeral head; the deltoid over it.
+// Layers, deep to superficial: the rotator cuff on the scapula and the humeral head; the pectoralis major
+// (its tendon passes under the anterior deltoid to the humerus), latissimus dorsi and triceps; the deltoid.
 export const shoulderPaths: JointPaths = {
 	surfaces: {
 		// the humeral head, a near sphere (fitted radius 22.4 mm) about which the arm turns. The cuff's
@@ -96,12 +99,14 @@ export const shoulderPaths: JointPaths = {
 		},
 		{
 			mesh: 'deltoid_ant',
-			layer: 1,
+			layer: 2,
 			// it lies curved round the front of the head at rest, 20-30 mm off the line from clavicle to humerus;
 			// as the arm rises it pulls in onto that line (kept, the curve arched the belly off the shoulder), and
 			// slides against the middle deltoid rather than into it
 			drape: [0, 60],
 			beside: ['deltoid_mid'],
+			// the pectoralis major's tendon passes under it to the humerus
+			over: ['pec_clav', 'pec_stern', 'pec_abd'],
 			strands: [[
 				{ bone: 'clavicle', p: [76, 30.6, 26.5] }, // lateral third of the clavicle
 				{ wrap: 'humeralHeadDeltoid' },
@@ -113,7 +118,7 @@ export const shoulderPaths: JointPaths = {
 		// off the attachment line, when abduction swung the fibres up, and it crumpled against the acromion)
 		{
 			mesh: 'deltoid_mid',
-			layer: 1,
+			layer: 2,
 			fan: true,
 			// only the attachment line holds: the belly lying on the bone below it at rest peels off and swings
 			// up with the fibres in abduction (held, it stayed hanging and the sheet folded over it)
@@ -128,7 +133,7 @@ export const shoulderPaths: JointPaths = {
 		},
 		{
 			mesh: 'deltoid_post',
-			layer: 1,
+			layer: 2,
 			strands: [[
 				{ bone: 'scapula', p: [64.1, -3.3, -66.7] }, // spine of the scapula
 				// along its fleshy origin on the spine and acromion (mesh centerline)
@@ -186,9 +191,20 @@ export const shoulderPaths: JointPaths = {
 				{ bone: 'humerus', p: [-45.5, -275.9, -27.9] } // (the elbow isn't in this model: rides the humerus)
 			]]
 		},
+		// coracoid process to the medial humeral shaft (ends from the mesh's attachment footprints; no wrap brought it
+		// nearer its reference path than straight). Its insertion runs some 30 mm along the shaft, held to the bone
+		{
+			mesh: 'coracobrachialis',
+			layer: 1,
+			anchor: [8, 30],
+			strands: [[
+				{ bone: 'scapula', p: [28.1, 7.3, 21.3] }, // coracoid process
+				{ bone: 'humerus', p: [-22.6, -122.6, -5] } // medial shaft
+			]]
+		},
 		{
 			mesh: 'pec_clav',
-			layer: 2,
+			layer: 1,
 			// its frames rolled to the sheet's own plane: carried along the strands, the sheet twisted into a rope
 			// as the arm rose and the fibres swung up over the joint
 			fan: true,
@@ -201,7 +217,7 @@ export const shoulderPaths: JointPaths = {
 		},
 		{
 			mesh: 'pec_stern',
-			layer: 2,
+			layer: 1,
 			// sternum and upper costal cartilages, lowest first
 			strands: [
 				[{ bone: 'humerus', p: [-22.4, -61.1, 10.6] }, { wrap: 'chestPec' }, { bone: 'thorax', p: [89.5, -147.4, 125] }],
@@ -212,7 +228,7 @@ export const shoulderPaths: JointPaths = {
 		},
 		{
 			mesh: 'pec_abd',
-			layer: 2,
+			layer: 1,
 			// lower costal cartilages and the rectus sheath: the highest part of the insertion (the tendon's twist)
 			strands: [
 				[{ bone: 'humerus', p: [-14.2, -45.9, 10.3] }, { wrap: 'chestPec' }, { bone: 'thorax', p: [87.7, -197.2, 126.5] }],
@@ -223,5 +239,7 @@ export const shoulderPaths: JointPaths = {
 	// muscles lying between scapula, humerus and ribs: a second pass shuttles vertices between them
 	collidePasses: 1,
 	// through the shoulder's range, pushing strands apart made them jump; off until that is resolved
-	contact: false
+	contact: false,
+	// hand-tuned keys, edited in the app's Tune panel (#debug) and saved to tuning.json
+	tuning: tuning as Tuning
 };

@@ -1,4 +1,6 @@
 import { decodeJointAssets, isGzip } from './assets';
+import { decodeBaked } from './muscle/baked';
+import { decodeCorrections } from './muscle/correct';
 import type { AssetManifest, JointAssets } from './types';
 
 /**
@@ -30,9 +32,18 @@ export interface JointAssetUrls {
 	manifest: AssetManifest;
 	geometry: string;
 	fields: string;
+	/** baked lines of action (muscle/baked.ts), for joints with baked muscles */
+	baked?: string;
+	/** mesh corrections solved against that bake (muscle/correct.ts) */
+	corrections?: string;
 }
 
 export async function loadJointAssets(src: JointAssetUrls): Promise<JointAssets> {
-	const [geometry, fields] = await Promise.all([loadBinary(src.geometry), loadBinary(src.fields)]);
-	return decodeJointAssets(src.manifest, geometry, fields);
+	const [geometry, fields, baked, corrections] = await Promise.all([
+		loadBinary(src.geometry), loadBinary(src.fields), src.baked ? loadBinary(src.baked) : null, src.corrections ? loadBinary(src.corrections) : null
+	]);
+	const assets = decodeJointAssets(src.manifest, geometry, fields);
+	if (baked) assets.baked = decodeBaked(baked);
+	if (corrections) assets.corrections = decodeCorrections(corrections);
+	return assets;
 }

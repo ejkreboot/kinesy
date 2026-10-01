@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { qRotate, rigidToMat4 } from '../core/math';
+import type { PathSolver } from '../core/muscle/path';
 import type { JointPaths } from '../core/muscle/schema';
 import type { MuscleSystem } from '../core/muscle/system';
+import type { Pose } from '../core/rig';
 
 /** Frame ticks every this many samples, this long (mm). */
 const TICK_EVERY = 4;
@@ -10,22 +12,33 @@ const TICK = 5;
 /**
  * Debug overlay for centerline deformation: solved strands, their frames (normal red, binormal
  * blue), wrap surfaces riding their bones, and the deep-muscle proxy capsules. Drawn over
- * everything; updated after each pose.
+ * everything; updated after each pose. Optionally a second solver's strands (the joint's baked lines
+ * of action, where they differ from what is drawn), in orange, on their own toggle.
  */
 export class PathDebug {
 	readonly group = new THREE.Group();
+	/** the comparison solver's strands */
+	readonly compareGroup = new THREE.Group();
 	private readonly strands: THREE.Line[] = [];
+	private readonly compareLines: { line: THREE.Line; strand: number }[] = [];
 	private readonly ticks: THREE.LineSegments;
 	private readonly surfaces: { mesh: THREE.Mesh; bone: number; base: THREE.Matrix4 }[] = [];
 	private readonly capsules: THREE.Mesh[] = [];
 
-	constructor(private readonly system: MuscleSystem, paths: JointPaths, boneNames: string[]) {
+	constructor(
+		private readonly system: MuscleSystem, paths: JointPaths, boneNames: string[],
+		private readonly compare: { solver: PathSolver; pose: () => Pose } | null = null,
+		/** strand colour by mesh (default near-black) */
+		colors: Map<string, string> = new Map()
+	) {
 		const S = system.solver, N = S.N;
 		const over = (m: THREE.Material & { depthTest: boolean }) => Object.assign(m, { depthTest: false, transparent: true });
 		for (let s = 0; s < S.strands.length; s++) {
 			const g = new THREE.BufferGeometry();
 			g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
-			const line = new THREE.Line(g, over(new THREE.LineBasicMaterial({ color: 0x111111 })));
+			// darkened, to stand out over the muscle it runs through
+			const color = new THREE.Color(colors.get(S.muscles[S.strands[s].muscle].def.mesh) ?? 0x111111).multiplyScalar(0.6);
+			const line = new THREE.Line(g, over(new THREE.LineBasicMaterial({ color })));
 			line.frustumCulled = false;
 			line.renderOrder = 20;
 			this.strands.push(line);
@@ -43,7 +56,9 @@ export class PathDebug {
 		this.group.add(this.ticks);
 
 		const wire = () => over(new THREE.MeshBasicMaterial({ color: 0x2a7de1, wireframe: true, opacity: 0.35 }));
-		for (const s of Object.values(paths.surfaces)) {
+		// only the surfaces some strand still wraps (a baked muscle has none)
+		const used = new Set(paths.muscles.flatMap((m) => m.strands.flat().flatMap((e) => ('wrap' in e ? [e.wrap] : []))));
+		for (const s of Object.entries(paths.surfaces).filter(([n]) => used.has(n)).map(([, s]) => s)) {
 			let geo: THREE.BufferGeometry;
 			const base = new THREE.Matrix4();
 			if (s.kind === 'cylinder') {
@@ -77,12 +92,36 @@ export class PathDebug {
 			this.capsules.push(mesh);
 			this.group.add(mesh);
 		}
+		if (compare) {
+			const C = compare.solver;
+			const mat = over(new THREE.LineBasicMaterial({ color: 0xe8590c }));
+			C.strands.forEach((st, s) => {
+				if (!st.baked) return;
+				const g = new THREE.BufferGeometry();
+				g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(C.N * 3), 3));
+				const line = new THREE.Line(g, mat);
+				line.frustumCulled = false;
+				line.renderOrder = 21;
+				this.compareLines.push({ line, strand: s });
+				this.compareGroup.add(line);
+			});
+		}
 		this.group.visible = false;
+		this.compareGroup.visible = false;
 		this.update();
 	}
 
 	/** Redraw from the system's last solve. */
 	update(): void {
+		if (this.compare && this.compareGroup.visible) {
+			const C = this.compare.solver, N = C.N;
+			C.solve(this.compare.pose());
+			for (const { line, strand } of this.compareLines) {
+				const a = line.geometry.attributes.position as THREE.BufferAttribute;
+				(a.array as Float32Array).set(C.pos.subarray(strand * N * 3, (strand + 1) * N * 3));
+				a.needsUpdate = true;
+			}
+		}
 		if (!this.group.visible) return;
 		const S = this.system.solver, N = S.N, P = S.pos, Q = S.quat;
 		this.strands.forEach((line, s) => {
@@ -117,6 +156,11 @@ export class PathDebug {
 
 	setVisible(on: boolean): void {
 		this.group.visible = on;
+		this.update();
+	}
+
+	setCompareVisible(on: boolean): void {
+		this.compareGroup.visible = on;
 		this.update();
 	}
 }

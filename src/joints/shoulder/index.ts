@@ -1,6 +1,8 @@
 import manifest from '../../../assets/shoulder/manifest.json';
 import geometryUrl from '../../../assets/shoulder/geometry.bin.gz?url';
 import fieldsUrl from '../../../assets/shoulder/fields.bin.gz?url';
+import bakedUrl from '../../../assets/shoulder/baked.bin.gz?url';
+import correctionsUrl from '../../../assets/shoulder/corrections.bin.gz?url';
 import type { AssetManifest } from '../../core/types';
 import type { JointModule, NamedView } from '../types';
 import { movements, muscles, scenarios } from './content';
@@ -26,7 +28,7 @@ export const shoulder: JointModule = {
 	id: 'shoulder',
 	title: 'Shoulder Movers',
 	subtitle: 'Right shoulder · drag to rotate',
-	assets: { manifest: manifest as unknown as AssetManifest, geometry: geometryUrl, fields: fieldsUrl },
+	assets: { manifest: manifest as unknown as AssetManifest, geometry: geometryUrl, fields: fieldsUrl, baked: bakedUrl, corrections: correctionsUrl },
 	rig: shoulderRig,
 	paths: shoulderPaths,
 	controls: [

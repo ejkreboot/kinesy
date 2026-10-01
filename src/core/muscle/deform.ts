@@ -11,7 +11,8 @@
  *      as closely as its samples instead of folding the slices over each other;
  *   3. position = center + frame · offset (less the part of the rest drape the strand has let go, see
  *      MusclePathDef.drape); normal = frame · (rest normal under the same scale);
- *   4. near each end, blend toward riding the attachment bone rigidly;
+ *   4. near each end, blend toward riding the attachment bone rigidly; then add the baked mesh
+ *      correction for the pose, if any (correct.ts), turned by the vertex's frame;
  *   5. kept out of bone distance fields (and, if on, the capsules of muscles in lower layers), only
  *      as far as the vertex is deeper than it sat at rest: back to the surface along the nearest way
  *      out (the distance field's gradient), then out to the margin by a smooth ramp. Keeping muscles on
@@ -29,6 +30,7 @@ import { qRotate, type Quat, type Rigid, type Vec3 } from '../math';
 import { sdfGradient, sdfSample, SDF_FAR } from '../sdf';
 import type { SdfGrid } from '../types';
 import type { BoundMesh } from './bind';
+import { correctionAt, type MeshCorrection } from './correct';
 import type { PathSolver } from './path';
 
 export interface CollideOptions {
@@ -205,16 +207,18 @@ function boneLocal(b: Rigid, x: number, y: number, z: number): Vec3 {
 
 /**
  * Deform a bound mesh at the solver's last pose. `rest`/`restNormal`: the mesh's rest positions
- * and unit normals. `capsules`: the proxies, lower layers first (the mesh uses its first bound.caps).
+ * and unit normals. `capsules`: the proxies (the mesh uses bound.caps of them from bound.capFirst).
  */
 export function deformMesh(
 	solver: PathSolver, bound: BoundMesh, rest: Float32Array, restNormal: Float32Array, fields: (SdfGrid | null)[],
-	capsules: CapsuleArray | null, opts: CollideOptions, outP: Float32Array, outN?: Float32Array
+	capsules: CapsuleArray | null, opts: CollideOptions, outP: Float32Array, outN?: Float32Array,
+	/** the mesh's baked correction and its handles' values at this pose */
+	corr: { m: MeshCorrection; w: Float32Array } | null = null
 ): void {
 	const bones = solver.bones, strands = solver.strands;
-	const c = [0, 0, 0], q = [0, 0, 0, 1], g = [0, 0, 0];
+	const c = [0, 0, 0], q = [0, 0, 0, 1], g = [0, 0, 0], cv = [0, 0, 0];
 	const { path, offset, normal, weights, clear, colliders, window, drape } = bound;
-	const nCaps = capsules ? Math.min(bound.caps, capsules.length / 8) : 0;
+	const capEnd = capsules ? Math.min(bound.capFirst + bound.caps, capsules.length / 8) : 0;
 	for (let i = 0; i < bound.nv; i++) {
 		const o3 = i * 3, o4 = i * 4;
 		const s = path[o4], beta = path[o4 + 1], ra = path[o4 + 2], rb = path[o4 + 3];
@@ -235,6 +239,11 @@ export function deformMesh(
 			px += (r[0] + B.t[0] - px) * aw; py += (r[1] + B.t[1] - py) * aw; pz += (r[2] + B.t[2] - pz) * aw;
 			const rn = qRotate(B.q, [restNormal[o3], restNormal[o3 + 1], restNormal[o3 + 2]]);
 			n = normalize([n[0] + (rn[0] - n[0]) * aw, n[1] + (rn[1] - n[1]) * aw, n[2] + (rn[2] - n[2]) * aw]);
+		}
+		if (corr) {
+			correctionAt(corr.m, corr.w, i, cv);
+			const d = qRotate(Q, [cv[0], cv[1], cv[2]]);
+			px += d[0]; py += d[1]; pz += d[2];
 		}
 		// collisions, in each obstacle's frame
 		const p = [px, py, pz];
@@ -257,7 +266,7 @@ export function deformMesh(
 			const tb = smoothstep(PROXY_BELLY[0], PROXY_BELLY[1], weights[o4]) * (1 - Math.max(weights[o4 + 1], weights[o4 + 2]));
 			if (tb > 0) {
 				const q0 = [p[0], p[1], p[2]];
-				for (let cap = 0; cap < nCaps; cap++) {
+				for (let cap = bound.capFirst; cap < capEnd; cap++) {
 					const o = cap * 8;
 					avoid((x, y, z) => capsuleDistance(capsules!, o, x, y, z, g), (v, out) => {
 						capsuleDistance(capsules!, o, v[0], v[1], v[2], out);

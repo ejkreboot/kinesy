@@ -100,6 +100,12 @@ export interface ContactModel {
 	bones: BoneContacts;
 	/** per strand, N·EXT_DIRS: its mesh's extent across it (see extentTable); null without a mesh */
 	ext: (Float64Array | null)[];
+	/**
+	 * per strand, the same with its mesh's drape relaxed onto it (MusclePathDef.drape); null without one. A
+	 * draped belly lies to one side of its strand at rest and comes onto it as the drape relaxes, so its
+	 * extent is taken between the two by how far the drape has relaxed (extent)
+	 */
+	relaxed: (Float64Array | null)[];
 	/** per strand, N: 1 where its mesh covers the sample, else 0 */
 	cover: Float64Array[];
 	/** per strand, N: rest clearance from bone, mm (SDF_FAR where none is near) */
@@ -136,16 +142,18 @@ export function buildContactModel(solver: PathSolver, bound: BoundMesh[], fields
 	const o = { ...DEFAULT_CONTACT_OPTIONS, ...opts };
 	const N = solver.N, P = solver.pos, S = solver.strands.length;
 	const meshOf = new Map(bound.map((b) => [b.muscle, b]));
-	const ext: (Float64Array | null)[] = [], cover: Float64Array[] = [], restClear: Float64Array[] = [];
+	const ext: (Float64Array | null)[] = [], relaxed: (Float64Array | null)[] = [], cover: Float64Array[] = [], restClear: Float64Array[] = [];
 	for (let s = 0; s < S; s++) {
 		const b = meshOf.get(solver.strands[s].muscle);
 		const e = b ? new Float64Array(N * EXT_DIRS) : null, cv = new Float64Array(N), rc = new Float64Array(N);
+		const er = b && solver.muscles[solver.strands[s].muscle].def.drape ? new Float64Array(N * EXT_DIRS) : null;
 		for (let i = 0; i < N; i++) {
 			if (b && e) cv[i] = extentTable(b, s, i, e, i * EXT_DIRS) ? 1 : 0;
+			if (b && er) extentTable(b, s, i, er, i * EXT_DIRS, true);
 			const p = (s * N + i) * 3;
 			rc[i] = boneClear(fields, solver.bones, P[p], P[p + 1], P[p + 2], null);
 		}
-		ext.push(e); cover.push(cv); restClear.push(rc);
+		ext.push(e); relaxed.push(er); cover.push(cv); restClear.push(rc);
 	}
 
 	const contacts: StrandContact[] = [];
@@ -196,9 +204,9 @@ export function buildContactModel(solver: PathSolver, bound: BoundMesh[], fields
 					});
 				}
 		}
-	const maxExt = Float64Array.from(ext, (e) => (e ? Math.max(...e) : 0));
+	const maxExt = Float64Array.from(ext, (e, s) => (e ? Math.max(...e, ...(relaxed[s] ?? [])) : 0));
 	const noBones: BoneContacts = { strand: new Int32Array(0), sample: new Int32Array(0), bone: new Int32Array(0), need: new Float64Array(0), n0: new Float64Array(0), n: new Float64Array(0) };
-	return { contacts, bones: o.bones ? buildBoneContacts(solver, ext, fields) : noBones, ext, cover, restClear, maxExt, fields, opts: o, free: new Float64Array(P.length) };
+	return { contacts, bones: o.bones ? buildBoneContacts(solver, ext, fields) : noBones, ext, relaxed, cover, restClear, maxExt, fields, opts: o, free: new Float64Array(P.length) };
 }
 
 /** Whether any bone (at rest: world = bone frame) lies across the segment from (x, y, z) to c. */
@@ -295,7 +303,7 @@ export function resolveContacts(solver: PathSolver, m: ContactModel, bones: Rigi
 	for (let sweep = 0; sweep < o.sweeps; sweep++) {
 		pushOffBones(solver, m, bones, anchors, pushed);
 		for (const ct of m.contacts) {
-			const u = ct.upper, l = ct.lower, eu = m.ext[u]!, el = m.ext[l]!;
+			const u = ct.upper, l = ct.lower;
 			for (let k = 0; k < ct.i.length; k++) {
 				const i = ct.i[k], ou = (u * N + i) * 3, x = P[ou], y = P[ou + 1], z = P[ou + 2];
 				const sigma = (ct.sigma[k] = softNearest(P, l, N, x, y, z, ct.sigma[k]));
@@ -309,7 +317,7 @@ export function resolveContacts(solver: PathSolver, m: ContactModel, bones: Rigi
 				if (d >= ct.base[k] + m.maxExt[l] + m.maxExt[u]) continue;
 				lerpQuat(Q, l, N, sigma, qBuf);
 				const qo = (u * N + i) * 4;
-				const need = ct.base[k] + extentAt(el, sigma, qBuf, n[0], n[1], n[2]) + extentAt(eu, i, Q.subarray(qo, qo + 4), -n[0], -n[1], -n[2]);
+				const need = ct.base[k] + extent(solver, m, l, sigma, qBuf, n[0], n[1], n[2]) + extent(solver, m, u, i, Q.subarray(qo, qo + 4), -n[0], -n[1], -n[2]);
 				const gap = w * wn * (1 - smoothstep(0.5 * need, need, along)) * pushRamp(need - d, o.soft);
 				if (gap <= 0) continue;
 				// shared by how freely each strand gives there, toward bone only as far as it has room
@@ -559,14 +567,15 @@ function softNearest(P: Float64Array, s: number, N: number, x: number, y: number
  * strand (angle about its tangent from the frame's y axis toward z), the furthest its vertices there
  * reach within a cone about each, in the strand's frame. False where the mesh doesn't cover it.
  */
-function extentTable(b: BoundMesh, s: number, at: number, out: Float64Array, o: number): boolean {
+function extentTable(b: BoundMesh, s: number, at: number, out: Float64Array, o: number, relaxed = false): boolean {
 	const N = b.profile.length;
 	let any = false;
 	for (let v = 0; v < b.nv; v++) {
 		const o4 = v * 4;
 		if (Math.round(b.path[o4 + 2] + b.path[o4 + 1]) !== s || Math.abs(b.path[o4] * (N - 1) - at) > WINDOW) continue;
 		any = true;
-		const oy = b.offset[v * 3 + 1], oz = b.offset[v * 3 + 2], l = Math.hypot(oy, oz);
+		// relaxed: less the vertex's part of the drape (bind.ts), as deformMesh takes it off
+		const oy = b.offset[v * 3 + 1] - (relaxed ? b.drape[v * 3 + 1] : 0), oz = b.offset[v * 3 + 2] - (relaxed ? b.drape[v * 3 + 2] : 0), l = Math.hypot(oy, oz);
 		for (let k = 0; k < EXT_DIRS; k++) {
 			const t = (2 * Math.PI * k) / EXT_DIRS, a = oy * Math.cos(t) + oz * Math.sin(t);
 			if (a > CONE * l) out[o + k] = Math.max(out[o + k], a);
@@ -583,6 +592,12 @@ function extentAt(ext: Float64Array, x: number, q: ArrayLike<number>, dx: number
 	const k = Math.floor(fa) % EXT_DIRS, k1 = (k + 1) % EXT_DIRS, fa1 = fa - Math.floor(fa);
 	const at = (row: number) => ext[row * EXT_DIRS + k] + (ext[row * EXT_DIRS + k1] - ext[row * EXT_DIRS + k]) * fa1;
 	return at(j) + (at(j + 1) - at(j)) * fx;
+}
+
+/** Extent of strand s's mesh as extentAt, between its rest and relaxed tables by how much of its drape it keeps now. */
+function extent(solver: PathSolver, m: ContactModel, s: number, x: number, q: ArrayLike<number>, dx: number, dy: number, dz: number): number {
+	const e = extentAt(m.ext[s]!, x, q, dx, dy, dz), r = m.relaxed[s];
+	return r ? e + (extentAt(r, x, q, dx, dy, dz) - e) * (1 - solver.drape[s]) : e;
 }
 
 function coverAt(cover: Float64Array, x: number): number {

@@ -12,6 +12,10 @@
  * position + spacing at texel 2i and its frame quaternion at 2i+1, (origin bone, insertion bone,
  * bulge factor, length) at 2N and (drape kept, 0, 0, 0) at 2N+1; the last row holds bone b's
  * translation at 2b and rotation at 2b+1.
+ *
+ * A mesh with a baked correction (core/muscle/correct.ts) has its own RGBA32F texture: for vertex v,
+ * texel 2v (row-major, CORR_WIDTH wide) holds its four handles and texel 2v+1 their weights; the handles'
+ * displacements at the pose (vertex frame) are a uniform array, set each frame.
  */
 import * as THREE from 'three';
 import type { BoundMesh } from '../core/muscle/bind';
@@ -21,6 +25,8 @@ import type { JointAssets } from '../core/types';
 
 /** Proxy capsules the shader can take (two vec4 uniforms each). */
 export const MAX_CAPSULES = 64;
+/** Width of a correction texture, texels. */
+const CORR_WIDTH = 1024;
 
 const PARS = /* glsl */ `
 uniform highp sampler2D kData;
@@ -31,9 +37,13 @@ uniform float kGridQ[K_BONES];   // mm per unit of the normalized texel
 uniform vec3 kAtlas;
 uniform vec4 kColliders;         // bone per slot, -1 unused
 uniform vec4 kCaps[2 * K_MAX_CAPS];
-uniform int kCapCount;            // capsules of lower layers (a prefix of kCaps)
+uniform int kCapFirst;            // capsules that push this mesh: kCapCount of kCaps from kCapFirst
+uniform int kCapCount;
 uniform vec3 kCollide;           // margin, soft, passes
 uniform float kEnabled;
+uniform highp sampler2D kCorrTex; // baked correction: per vertex, its four handles, then their weights
+uniform int kCorrOn;
+uniform vec3 kCorrV[K_CORR];      // the handles' displacements at the pose
 attribute vec4 kPath;            // s, blend, strand A, strand B
 attribute vec3 kOffset;
 attribute vec3 kNormal;
@@ -82,6 +92,10 @@ void kWindowed(int row, float s, float len, out vec3 c, out vec4 q, out float sp
 	c = 0.5 * c + 0.25 * (ca + cb);
 	q = normalize(0.5 * q + 0.25 * (qa + qb));
 	spacing = 0.5 * spacing + 0.25 * (sa + sb);
+}
+
+vec4 kCorrTexel(int i) {
+	return texelFetch(kCorrTex, ivec2(i % K_CORR_WIDTH, i / K_CORR_WIDTH), 0);
 }
 
 void kBone(int b, out vec3 t, out vec4 q) {
@@ -208,6 +222,13 @@ void kDeform() {
 		n = normalize(mix(n, kRot(bq, normal), kWeights.z));
 	}
 
+	// the baked correction for the pose, in the vertex's frame
+	if (kCorrOn > 0) {
+		vec4 hi = kCorrTexel(2 * gl_VertexID), hw = kCorrTexel(2 * gl_VertexID + 1);
+		vec3 d = hw.x * kCorrV[int(hi.x + 0.5)] + hw.y * kCorrV[int(hi.y + 0.5)] + hw.z * kCorrV[int(hi.z + 0.5)] + hw.w * kCorrV[int(hi.w + 0.5)];
+		p += kRot(q, d);
+	}
+
 	// keep out of bones and, if on, the proxies of lower layers
 	float tb = smoothstep(K_PROXY_B0, K_PROXY_B1, kWeights.x) * (1.0 - max(kWeights.y, kWeights.z));
 	int passes = int(kCollide.z + 0.5);
@@ -227,7 +248,7 @@ void kDeform() {
 		vec3 p0 = p;
 		for (int i = 0; i < K_MAX_CAPS; i++) {
 			if (i >= kCapCount) break;
-			p = kAvoidCap(i, p, min(kWeights.w, kCollide.x));
+			p = kAvoidCap(kCapFirst + i, p, min(kWeights.w, kCollide.x));
 		}
 		p = mix(p0, p, tb);
 	}
@@ -275,6 +296,11 @@ export class MuscleGpu {
 	private readonly defines: string;
 	private readonly key: string;
 	private readonly caps: THREE.Vector4[];
+	/** per mesh (solver order): its correction texture and the handle values uniform; null for none */
+	private readonly corr: ({ tex: THREE.DataTexture; v: Float32Array } | null)[];
+	private readonly maxH: number;
+	/** stands in for a correction texture where a mesh has none */
+	private readonly noCorr: THREE.DataTexture;
 
 	constructor(private readonly system: MuscleSystem, assets: JointAssets) {
 		const solver = system.solver;
@@ -318,6 +344,22 @@ export class MuscleGpu {
 		this.sdf.needsUpdate = true;
 
 		this.caps = Array.from({ length: 2 * MAX_CAPSULES }, () => new THREE.Vector4());
+		const maxH = (this.maxH = Math.max(1, ...system.corrections.map((c) => c?.m.H ?? 0)));
+		this.noCorr = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+		this.noCorr.needsUpdate = true;
+		this.corr = system.corrections.map((c) => {
+			if (!c) return null;
+			const { m } = c, h = Math.ceil((m.nv * 2) / CORR_WIDTH), data = new Float32Array(CORR_WIDTH * h * 4);
+			for (let i = 0; i < m.nv * 4; i++) {
+				data[(Math.floor(i / 4) * 2) * 4 + (i % 4)] = m.idx[i];
+				data[(Math.floor(i / 4) * 2 + 1) * 4 + (i % 4)] = m.w[i];
+			}
+			const tex = new THREE.DataTexture(data, CORR_WIDTH, h, THREE.RGBAFormat, THREE.FloatType);
+			tex.minFilter = tex.magFilter = THREE.NearestFilter;
+			tex.generateMipmaps = false;
+			tex.needsUpdate = true;
+			return { tex, v: new Float32Array(maxH * 3) };
+		});
 		const c = system.collide;
 		this.shared = {
 			kData: { value: this.data },
@@ -341,9 +383,11 @@ export class MuscleGpu {
 			`#define K_RIDGE_F0 ${RIDGE_FADE[0].toFixed(3)}`,
 			`#define K_RIDGE_F1 ${RIDGE_FADE[1].toFixed(3)}`,
 			`#define K_PROXY_B0 ${PROXY_BELLY[0].toFixed(3)}`,
-			`#define K_PROXY_B1 ${PROXY_BELLY[1].toFixed(3)}`
+			`#define K_PROXY_B1 ${PROXY_BELLY[1].toFixed(3)}`,
+			`#define K_CORR ${maxH}`,
+			`#define K_CORR_WIDTH ${CORR_WIDTH}`
 		].join('\n');
-		this.key = `kinesy-muscle-${solver.N}-${solver.strands.length}-${nb}`;
+		this.key = `kinesy-muscle-${solver.N}-${solver.strands.length}-${nb}-${maxH}`;
 		if (system.capsules.length / 8 > MAX_CAPSULES) console.warn(`MuscleGpu: ${system.capsules.length / 8} proxy capsules, shader takes ${MAX_CAPSULES}`);
 		this.update();
 	}
@@ -366,6 +410,9 @@ export class MuscleGpu {
 			this.caps[2 * i].set(C[i * 8], C[i * 8 + 1], C[i * 8 + 2], C[i * 8 + 3]);
 			this.caps[2 * i + 1].set(C[i * 8 + 4], C[i * 8 + 5], C[i * 8 + 6], C[i * 8 + 7]);
 		}
+		this.corr.forEach((c, i) => {
+			if (c) c.v.set(this.system.corrections[i]!.w);
+		});
 	}
 
 	/** Add the binding attributes to a muscle's (rest-pose) geometry. */
@@ -381,7 +428,12 @@ export class MuscleGpu {
 
 	/** Patch a material (any built-in with begin_vertex) to deform like `b`. */
 	patch<M extends THREE.Material>(material: M, b: BoundMesh, fragment?: (s: THREE.WebGLProgramParametersWithUniforms) => void, keySuffix = ''): M {
-		const own = { kColliders: { value: new THREE.Vector4(...b.colliders) }, kCapCount: { value: Math.min(MAX_CAPSULES, b.caps) } };
+		const first = Math.min(MAX_CAPSULES, b.capFirst);
+		const corr = this.corr[b.muscle];
+		const own = {
+			kColliders: { value: new THREE.Vector4(...b.colliders) }, kCapFirst: { value: first }, kCapCount: { value: Math.min(MAX_CAPSULES - first, b.caps) },
+			kCorrTex: { value: corr?.tex ?? this.noCorr }, kCorrOn: { value: corr ? 1 : 0 }, kCorrV: { value: corr?.v ?? new Float32Array(this.maxH * 3) }
+		};
 		material.onBeforeCompile = (shader) => {
 			Object.assign(shader.uniforms, this.shared, own);
 			patchVertex(shader, this.defines);
@@ -411,6 +463,8 @@ export class MuscleGpu {
 	dispose(): void {
 		this.data.dispose();
 		this.sdf.dispose();
+		this.noCorr.dispose();
+		for (const c of this.corr) c?.tex.dispose();
 	}
 }
 

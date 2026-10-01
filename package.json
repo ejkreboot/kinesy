@@ -11,7 +11,9 @@
 		"preview": "vite preview",
 		"check": "tsc --noEmit",
 		"validate": "tsx scripts/validate-deform.ts",
-		"route": "tsx scripts/route.ts"
+		"route": "tsx scripts/route.ts",
+		"bake": "tsx scripts/bake.ts",
+		"correct": "tsx scripts/correct.ts"
 	},
 	"dependencies": {
 		"three": "^0.186.1"

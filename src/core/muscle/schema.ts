@@ -8,6 +8,7 @@
  * the meshes were captured in, where every bone's transform is the identity.
  */
 import type { Vec3 } from '../math';
+import type { Tuning } from './tune';
 
 /** A fixed point on a bone: origin, via point, or insertion. */
 export interface PathPoint {
@@ -134,7 +135,8 @@ export interface MusclePathDef {
 	 * between its ends; bound as it is, it kept that offset whatever the strand did, and arched off the
 	 * shoulder once the arm rose. With this, the offset shrinks to `share` of itself as the strand turns
 	 * from its rest direction (relative to its origin bone) by `degrees`, so the belly pulls in along its
-	 * line of action as a contracting muscle does. Default: none.
+	 * line of action as a contracting muscle does. Only the offset across a flat belly's thickness: across
+	 * its width it lies beside its strand, which it keeps (bind.ts, restDrape). Default: none.
 	 */
 	drape?: [number, number];
 	/**
@@ -144,6 +146,19 @@ export interface MusclePathDef {
 	 * where the joint turns contact off.
 	 */
 	beside?: string[];
+	/**
+	 * meshes that pass under this one where they cross it (the pectoralis major's clavicular head under the
+	 * anterior deltoid, on its way to the humerus): its belly is kept off capsules along their strands
+	 * (proxies.ts), as far off as it was at rest, so it rides up over them. On even where the joint turns
+	 * contact off; they must be consecutive in `muscles` order among the meshes any muscle names here.
+	 */
+	over?: string[];
+	/**
+	 * strands looked up from the joint's baked lines of action (baked.ts; made by scripts/bake.ts) rather
+	 * than built from wraps: each strand lists its fixed points only (origin, via points, insertion), and
+	 * the bake finds the way between them that stays off the bones. Default false.
+	 */
+	baked?: boolean;
 	/** bones the mesh is kept outside of (at most 4); default: every bone with a distance field */
 	collide?: string[];
 	/** mesh whose path length sets this one's bulge (a head that ends at a shared tendon) */
@@ -180,6 +195,8 @@ export interface JointPaths {
 	 * pairs muscles name as `beside` keep theirs
 	 */
 	contact?: false;
+	/** hand-tuned keys (tune.ts): rolls, offsets and shortenings of bellies at chosen poses */
+	tuning?: Tuning;
 }
 
 export function isPoint(e: PathElement): e is PathPoint | JoinPoint {
