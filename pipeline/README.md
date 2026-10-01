@@ -23,10 +23,15 @@ python pipeline/build.py elbow --refit-axes   # also refit joint axes (several m
      and gliding joints whose axes are not properties of the surfaces (shoulder: humeral head
      sphere fit with trunk-aligned flexion / abduction axes and the humeral shaft for rotation;
      medial end of the clavicle; the acromioclavicular facet with the scapular-plane normal).
+   An `offset` moves a fitted centre (the knee's patella turns about an axis 10 mm in front of the flexion
+   axis, fitted against the femur so it stays on the trochlea and condyles).
    Results are frozen in `joints/<joint>.axes.json` so builds are fast and reproducible.
 2. **Meshes** (`lib/meshes.py`). Muscles are decimated to about 7,000 faces; the viewer
    frame is y-up, z-anterior, millimetres, with the origin on the primary axis. A bone mesh
    may merge several FMA ids (the shoulder's rib cage, sternum, and spine form one `thorax`).
+   A joint's `clip_muscle(name, mesh, src)` can trim a mesh first (`lib/sheets.py` `clip_below`: cut by a
+   plane and closed; the quadriceps end at the patella), and its `tissues(src, bone_id)` can add meshes the
+   sources lack, with their own skin weights (`tendon_sheet`: the knee's aponeurosis and patellar ligament).
 3. **Skin weights** (`lib/skin.py`). Each vertex is weighted by its proximity to the bones
    the muscle may attach to, smoothed over the mesh, then averaged with touching muscles
    so shared tendons move together. Tendons held to the bones by pulleys (the hand's long
