@@ -2,7 +2,7 @@
 
 Interactive 3D joint and muscle models for kinesiology study. Each joint gets a posable model
 built from real anatomical meshes, movement demos that light up the prime movers, and a quiz
-(identify, recall, movers). Joints so far: shoulder, elbow, wrist & hand, hip, and knee, each shown on its own
+(identify, recall, movers). Joints so far: jaw, neck, shoulder, elbow, wrist & hand, hip, and knee, each shown on its own
 and chosen with the picker (`?joint=shoulder` in the URL also works; the last choice is remembered).
 
 ## Commands
@@ -29,7 +29,7 @@ src/
   core/            framework-free; runs in the browser and in Node
     math.ts        vectors, quaternions, rigid transforms
     rig.ts         kinematic chain: bones carrying one or more joints (axis, rest angle, range,
-                   optional coupling), pose -> transforms
+                   optional coupling; turning about the axis, or sliding along it), pose -> transforms
     deformer.ts    dual-quaternion skinning + constant-volume bulge + bone collision, for muscles
                    without lines of action (the hand); hand tuning about each one's centerline
     muscle/        muscles on lines of action (see "How muscles are modelled")
@@ -57,6 +57,9 @@ src/
     tune.ts        #debug Tune panel: set keys, save to the joint's tuning.json
   joints/
     types.ts       JointModule: everything the app needs for one joint
+    jaw/           both temporomandibular joints: the mandible hinges, then glides onto the eminences
+                   (fitted condylar path and tooth guidance); both sides' muscles of mastication and suprahyoids
+    neck/          the head on C1–C7 over a fixed thorax; three sliders shared out over eight levels; 21 muscles a side
     shoulder/      rig (with scapulohumeral rhythm), paths, muscles, movements, scenarios, reference
     elbow/         rig, paths, muscles, movements, quiz scenarios, reference tab
     hand/          wrist, thumb, and fingers (17 bones; shared finger sliders); skinned, not on paths
@@ -66,7 +69,8 @@ src/
   main.ts          joint picker; mounts one joint at a time
 assets/<joint>/    manifest.json, geometry.bin.gz, fields.bin.gz (pipeline); baked.bin.gz (bake);
                    corrections.bin.gz (correct)
-pipeline/          Python: source meshes -> assets (see pipeline/README.md)
+pipeline/          Python: source meshes -> assets (see pipeline/README.md); lib/tmj.py and lib/spine.py fit the
+                   jaw's and the neck's joints
 scripts/           Node tooling (tsx)
   bake.ts          lines of action over a pose grid, in parallel (lib/bake.ts, lib/reference.ts)
   correct.ts       mesh corrections (lib/correct.ts)
@@ -140,6 +144,9 @@ A joint whose muscles are skinned instead (the hand) registers its rig and test 
 
 Each joint is its own model: include only the bones and muscles relevant to it (muscles that
 cross it belong; neighbouring joints do not).
+
+A joint can slide its bone along its axis instead of turning it (`slide: true`, value in mm): the jaw's condyles
+glide forward onto the articular eminences, and the hyoid drops as the jaw opens.
 
 A bone can carry several joints (`joints: [...]`, outermost first), and `frame: 'root'` poses a
 ball joint against the trunk while it rides a moving parent (the shoulder's humerus on the

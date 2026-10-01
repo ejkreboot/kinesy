@@ -102,15 +102,19 @@ export function obstaclePaths(paths: JointPaths, baked: BakedPaths): JointPaths 
 }
 
 /**
- * The muscles a muscle's strands are kept off: off the muscles of lower layers it touches at rest, except
- * those it lies over (MusclePathDef.over); below the muscles that lie over it (the pectoralis major's tendon
- * under the anterior deltoid, rather than the deltoid off it), touching at rest or not.
+ * The muscles a muscle's strands are kept off: off the muscles of lower layers it touches at rest, and those it
+ * names as beneath it (MusclePathDef.beneath), except those it lies over (MusclePathDef.over); below the muscles
+ * that lie over it (the pectoralis major's tendon under the anterior deltoid, rather than the deltoid off it),
+ * touching at rest or not.
  */
 export function obstaclesOf(J: LoadedJoint, paths: JointPaths, mesh: string): { beneath: string[]; under: string[] } {
 	const def = paths.muscles.find((m) => m.mesh === mesh)!, over = def.over ?? [];
 	const under = paths.muscles.filter((m) => m.over?.includes(mesh)).map((m) => m.mesh);
 	const lower = paths.muscles.filter((m) => m.layer < def.layer && m.obstacle !== false && !over.includes(m.mesh) && !under.includes(m.mesh)).map((m) => m.mesh);
-	return { beneath: touching({ J }, mesh, lower), under };
+	// those it touches at rest, and those it is named to lie on (MusclePathDef.beneath) though it meets them only as the joint moves
+	const named = (def.beneath ?? []).filter((m) => lower.includes(m));
+	if (named.length !== (def.beneath ?? []).length) throw new Error(`${mesh}: beneath names a muscle that isn't in a lower layer (or lies over it)`);
+	return { beneath: [...new Set([...touching({ J }, mesh, lower), ...named])], under };
 }
 
 /**
@@ -158,7 +162,7 @@ export class ChainBaker {
 		this.jobs = which.map((w) => {
 			const def = paths.muscles.find((m) => m.mesh === w.mesh)!;
 			const fixed = def.strands[w.k].filter(isPoint) as PathPoint[];
-			const model = bandModel(this.ctx, w.mesh, fixed, { ...obstaclesOf(J, paths, w.mesh), guide: J.spec.bakeGuide, collide: def.collide });
+			const model = bandModel(this.ctx, w.mesh, fixed, { ...obstaclesOf(J, paths, w.mesh), guide: J.spec.bakeGuide, collide: def.collide, axis: def.axis });
 			return { which: w, fixed, model, frame: model.bones[model.bones.length - 1], collide: def.collide };
 		});
 		if (axes.some((a) => !a.values.includes(this.ctx.restPose[a.joint]))) throw new Error('every bake axis needs its rest angle as a grid value');

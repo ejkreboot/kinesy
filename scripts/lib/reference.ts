@@ -213,7 +213,16 @@ export interface ReferenceOptions {
 	 * where the straight line runs through the femoral head)
 	 */
 	guide?: boolean;
+	/**
+	 * bones whose centres, in this order, make a line the band keeps at least as far from as at rest, less
+	 * AXIS_SLACK (MusclePathDef.axis): the soft tissue the joint's meshes leave out, holding a superficial muscle
+	 * out at its radius from the spine
+	 */
+	axis?: string[];
 }
+
+/** How much nearer the line through its `axis` bones a band may come than it was at rest, mm. */
+const AXIS_SLACK = 3;
 
 /** Cell size of the coarse hash a deep surface is searched with (UNDER_REACH is far for CELL), mm. */
 const FAR_CELL = 12;
@@ -323,6 +332,28 @@ export function bandModel(ctx: RouteContext, mesh: string, fixed: PathPoint[], o
 		return arc.map((a) => Math.min(1, Math.min(a, L - a) / END_RAMP));
 	};
 	const near: { d: number; w: Vec3; need: number }[] = [];
+	// the axis (opts.axis): each bone's centre (its meshes' centroid at rest, where every bone is at the identity),
+	// and per band point, the distance from it the band keeps (set once the rest band is relaxed)
+	const axisBones = (opts.axis ?? []).map(bi);
+	const axisLocal = axisBones.map((b) => {
+		const c = [0, 0, 0];
+		let n = 0;
+		for (const m of J.assets.bones) if (m.bone === b) for (let i = 0; i < m.rest.length; i += 3) { c[0] += m.rest[i]; c[1] += m.rest[i + 1]; c[2] += m.rest[i + 2]; n++; }
+		return c.map((v) => v / Math.max(1, n));
+	});
+	let axisHold: Float64Array | null = null;
+	/** distance from the axis polyline at `bones`, and the unit direction away from it */
+	const axisAway = (x: number[], bones: Rigid[]): { d: number; dir: number[] } => {
+		const C = axisBones.map((b, k) => world(bones[b], axisLocal[k]));
+		let best = Infinity, dir = [0, 0, 0];
+		for (let k = 0; k + 1 < C.length; k++) {
+			const a = C[k], e = C[k + 1].map((v, c) => v - a[c]), ee = e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
+			const t = ee > 1e-12 ? Math.min(1, Math.max(0, ((x[0] - a[0]) * e[0] + (x[1] - a[1]) * e[1] + (x[2] - a[2]) * e[2]) / ee)) : 0;
+			const v = [x[0] - a[0] - e[0] * t, x[1] - a[1] - e[1] * t, x[2] - a[2] - e[2] * t], d = Math.hypot(v[0], v[1], v[2]);
+			if (d < best) { best = d; dir = d > 1e-9 ? v.map((c) => c / d) : [0, 0, 0]; }
+		}
+		return { d: best, dir };
+	};
 	function relax(bands: number[][][], bones: Rigid[], pose: Pose, passes: number, muscles = true) {
 		const surf = muscles && obstacles.length && needMuscle ? surfaces.at(pose, obstacles) : null;
 		for (let it = 0; it < passes; it++) {
@@ -356,6 +387,11 @@ export function bandModel(ctx: RouteContext, mesh: string, fixed: PathPoint[], o
 						// out of the bone in full (unless squeezed in a gap), then toward the clearance a step at a time
 						const s = Math.max(Math.min(PUSH, o.need - o.d), o.need >= 0 ? -o.d : 0);
 						if (s > 0) for (let c = 0; c < 3; c++) x[c] += o.w[c] * s;
+					}
+					if (axisHold) {
+						// out to its rest distance from the axis (less the slack), a step at a time
+						const a = axisAway(x, bones), want = axisHold[idx] * r[idx];
+						if (a.d < want) { const s = Math.min(PUSH, want - a.d); for (let c = 0; c < 3; c++) x[c] += a.dir[c] * s; }
 					}
 					if (surf) for (const m of beneath) {
 						const S = surf.get(m)!, nm = Math.min(need, needMuscle!.get(m)![idx]);
@@ -412,6 +448,7 @@ export function bandModel(ctx: RouteContext, mesh: string, fixed: PathPoint[], o
 		needMuscle ??= new Map();
 	}
 	if (obstacles.length) relax(rest, W0, ctx.restPose, 200);
+	if (axisBones.length) axisHold = Float64Array.from(flat(rest), (x) => Math.max(0, axisAway(x, W0).d - AXIS_SLACK));
 	const carry = (bands: number[][][], W: Rigid[], Wn: Rigid[]) =>
 		bands.map((X, k) => {
 			const ba = bi(fixed[k].bone), bb = bi(fixed[k + 1].bone);

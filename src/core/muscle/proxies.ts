@@ -37,11 +37,14 @@ export function buildProxies(solver: PathSolver, bound: BoundMesh[], perStrand =
 
 /**
  * Capsule chains (as buildProxies) only for the meshes muscles name as lying `over` (MusclePathDef.over),
- * in the solver's muscle order; sets each naming mesh's range of them.
+ * in the solver's muscle order; sets each naming mesh's range of them. Not for a baked muscle's `over` (as
+ * withBaked drops it): its bake already holds those muscles below it, and pushing its belly off their capsules
+ * as well only made it snap (the neck's trapezius, 25 mm).
  */
 export function buildOverProxies(solver: PathSolver, bound: BoundMesh[], perStrand = 6, fill = 1.0): ProxySpec[] {
 	const out: ProxySpec[] = [], range = new Map<string, [number, number]>();
-	const named = new Set(bound.flatMap((b) => solver.muscles[b.muscle].def.over ?? []));
+	const overOf = (b: BoundMesh) => (solver.muscles[b.muscle].def.baked ? [] : (solver.muscles[b.muscle].def.over ?? []));
+	const named = new Set(bound.flatMap(overOf));
 	for (const b of bound) {
 		if (!named.has(b.name)) continue;
 		const from = out.length;
@@ -49,7 +52,7 @@ export function buildOverProxies(solver: PathSolver, bound: BoundMesh[], perStra
 		range.set(b.name, [from, out.length]);
 	}
 	for (const b of bound) {
-		const over = solver.muscles[b.muscle].def.over ?? [];
+		const over = overOf(b);
 		if (!over.length) continue;
 		const r = over.map((n) => {
 			const x = range.get(n);

@@ -5,6 +5,8 @@ import type { JointModule } from './joints/types';
 // Each joint is shown on its own; its module (and assets) load only when picked. Listed in
 // anatomical order, proximal to distal.
 const JOINTS: { id: string; label: string; load: () => Promise<JointModule> }[] = [
+	{ id: 'jaw', label: 'Jaw (TMJ)', load: () => import('./joints/jaw').then((m) => m.jaw) },
+	{ id: 'neck', label: 'Neck', load: () => import('./joints/neck').then((m) => m.neck) },
 	{ id: 'shoulder', label: 'Shoulder', load: () => import('./joints/shoulder').then((m) => m.shoulder) },
 	{ id: 'elbow', label: 'Elbow', load: () => import('./joints/elbow').then((m) => m.elbow) },
 	{ id: 'hand', label: 'Wrist & hand', load: () => import('./joints/hand').then((m) => m.hand) },

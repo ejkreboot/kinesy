@@ -150,9 +150,23 @@ export interface MusclePathDef {
 	 * meshes that pass under this one where they cross it (the pectoralis major's clavicular head under the
 	 * anterior deltoid, on its way to the humerus): its belly is kept off capsules along their strands
 	 * (proxies.ts), as far off as it was at rest, so it rides up over them. On even where the joint turns
-	 * contact off; they must be consecutive in `muscles` order among the meshes any muscle names here.
+	 * contact off; they must be consecutive in `muscles` order among the meshes any muscle names here. For a
+	 * baked muscle, only the bake (those muscles held below its deep surface) and its mesh corrections use it.
 	 */
 	over?: string[];
+	/**
+	 * muscles of lower layers it lies on somewhere in the joint's range, though it doesn't touch them at rest: the
+	 * bake keeps its strands off them as off those it does touch, and its mesh corrections keep it out of them
+	 * (sternocleidomastoid onto the scalenes and the longus muscles as the head turns toward it)
+	 */
+	beneath?: string[];
+	/**
+	 * bones whose centres, in order, make a line (the cervical spine) the bake keeps this muscle's strands at least
+	 * as far from as at rest, less a little: the soft tissue the model leaves out (larynx, pharynx, vessels, fat).
+	 * Without it, sternocleidomastoid's strands found their way between the deep muscles down to the vertebrae as
+	 * the head turned.
+	 */
+	axis?: string[];
 	/**
 	 * strands looked up from the joint's baked lines of action (baked.ts; made by scripts/bake.ts) rather
 	 * than built from wraps: each strand lists its fixed points only (origin, via points, insertion), and
@@ -164,8 +178,17 @@ export interface MusclePathDef {
 	 * thin sheet they meet rather than lie on (the quadriceps' aponeurosis). Default true.
 	 */
 	obstacle?: boolean;
-	/** bones the mesh is kept outside of (at most 4); default: every bone with a distance field */
+	/**
+	 * bones the mesh is kept outside of (at most 4), and the only bones the bake keeps its strands off; default:
+	 * every bone with a distance field (where there are more than 4, the mesh is kept out of the 4 it lies on most
+	 * at rest, bind.ts, and the bake keeps the strands off them all)
+	 */
 	collide?: string[];
+	/**
+	 * share of the turn between its attachments that it rolls through along its length (default 1): less for a
+	 * muscle held to the body, which winds round it as a bone turns rather than spinning about its own line
+	 */
+	twist?: number;
 	/** mesh whose path length sets this one's bulge (a head that ends at a shared tendon) */
 	lengthRef?: string;
 	/** whether the belly thickens as the path shortens; default true */

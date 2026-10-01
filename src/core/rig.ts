@@ -1,10 +1,10 @@
-import { DEG, normalize3, rigidAboutAxis, rigidApply, rigidCompose, rigidIdentity, type Rigid, type Vec3 } from './math';
+import { DEG, normalize3, qIdentity, rigidAboutAxis, rigidApply, rigidCompose, rigidIdentity, type Rigid, type Vec3 } from './math';
 import type { AxisDef } from './types';
 
 /**
- * A kinematic chain of bones. Each non-root bone may carry rotational joints whose axes come
- * from the joint's asset manifest. Joint angles are clinical (goniometric) degrees;
- * `restAngle` is the clinical angle the meshes were captured in.
+ * A kinematic chain of bones. Each non-root bone may carry joints whose axes come from the joint's
+ * asset manifest: rotational, or sliding along the axis (`slide`). Joint angles are clinical
+ * (goniometric) degrees, a slide's in mm; `restAngle` is the value the meshes were captured in.
  */
 export interface RigJointDef {
 	id: string;
@@ -21,6 +21,11 @@ export interface RigJointDef {
 	initial: number;
 	/** degrees added to this joint's angle, computed from the whole pose (e.g. scapulohumeral rhythm) */
 	coupled?: (pose: Pose) => number;
+	/**
+	 * the joint moves its bone along the axis direction, by its value in mm, rather than turning it about the
+	 * axis (a condyle gliding forward onto the articular eminence)
+	 */
+	slide?: boolean;
 }
 
 export interface RigBoneDef {
@@ -137,7 +142,8 @@ export class Rig {
 			for (const id of b.joints ?? []) {
 				const ji = this.jointIndex.get(id)!, j = this.def.joints[ji], ax = this.axes[ji]!;
 				joints[ji] = w;
-				w = rigidCompose(w, rigidAboutAxis(ax.point, ax.dir, (this.angle(id, pose) - j.restAngle) * DEG));
+				const v = this.angle(id, pose) - j.restAngle;
+				w = rigidCompose(w, j.slide ? { q: qIdentity(), t: [ax.dir[0] * v, ax.dir[1] * v, ax.dir[2] * v] } : rigidAboutAxis(ax.point, ax.dir, v * DEG));
 			}
 			bones[i] = w;
 		});

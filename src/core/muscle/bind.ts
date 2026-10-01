@@ -260,7 +260,7 @@ export function bindMesh(
 		}
 	}
 
-	const names = def.collide ?? boneNames.filter((_, b) => fields[b]);
+	const names = def.collide ?? nearestColliders(rest, nv, fields).map((b) => boneNames[b]);
 	if (names.length > 4) throw new Error(`${name}: at most 4 collider bones`);
 	const colliders: [number, number, number, number] = [-1, -1, -1, -1];
 	names.forEach((n, k) => {
@@ -400,4 +400,28 @@ export function setProxyClearance(bound: BoundMesh, rest: Float32Array, capsules
 		for (let k = bound.capFirst; k < n; k++) d = Math.min(d, capsuleDistance(capsules, k * 8, rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2], g));
 		bound.weights[v * 4 + 3] = d;
 	}
+}
+
+/** Within this distance of a bone at rest a vertex counts toward it being one of the mesh's colliders, mm. */
+const NEAR_BONE = 6;
+
+/**
+ * The bones a mesh is kept out of when its muscle names none (MusclePathDef.collide): every bone with a distance
+ * field, or where there are more than 4 (the shader takes 4; the neck's vertebrae), the 4 the mesh lies on most
+ * at rest (vertices within NEAR_BONE of each), then nearest.
+ */
+function nearestColliders(rest: ArrayLike<number>, nv: number, fields: (SdfGrid | null)[]): number[] {
+	const withField = fields.map((g, b) => (g ? b : -1)).filter((b) => b >= 0);
+	if (withField.length <= 4) return withField;
+	const score = withField.map((b) => {
+		let near = 0, closest = SDF_FAR;
+		for (let v = 0; v < nv; v++) {
+			const d = sdfSample(fields[b]!, rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2]);
+			if (d < NEAR_BONE) near++;
+			closest = Math.min(closest, d);
+		}
+		return { b, near, closest };
+	});
+	score.sort((a, c) => c.near - a.near || a.closest - c.closest);
+	return score.slice(0, 4).map((x) => x.b).sort((a, c) => a - c);
 }

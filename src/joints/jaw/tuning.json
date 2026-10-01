@@ -1,0 +1,17 @@
+{
+	"lattice": [
+		{
+			"joint": "opening",
+			"step": 5
+		},
+		{
+			"joint": "protrusion",
+			"step": 4
+		},
+		{
+			"joint": "lateral",
+			"step": 3
+		}
+	],
+	"keys": {}
+}

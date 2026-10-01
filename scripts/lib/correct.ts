@@ -8,7 +8,7 @@
  *     by one strand swinging off the clavicle);
  *   - neighbours (obstaclesOf): vertices that were outside a muscle at rest and have gone inside it, put
  *     back out of it by MARGIN, the nearest way: out of the muscles it lies beside or on;
- *   - muscles it lies over (MusclePathDef.over): its vertices with more of such a muscle outside them than
+ *   - muscles it lies over or on (MusclePathDef.over, beneath): its vertices with more of such a muscle outside them than
  *     at rest (marching away from the bone, DEPTH mm), lifted out past it (the anterior deltoid kept over
  *     the pectoralis major's tendon, rather than the tendon crossing on top of it or pushed into bone);
  *   - muscles it passes under: vertices lying over or in them, found by marching toward the bone (the
@@ -194,9 +194,13 @@ export class MeshFixer {
 		this.targets = meshes.map((mesh) => {
 			const index = this.sys.meshes.findIndex((x) => x.name === mesh), m = this.sys.meshes[index], bound = this.sys.bound[index];
 			const o = obstaclesOf(J, J.spec.paths, mesh), def = J.spec.paths.muscles.find((d) => d.mesh === mesh)!;
+			// lifted over the muscles it lies over or is named to lie on (MusclePathDef.over, beneath), wherever more of
+			// them is outside it than at rest: a sheet they show through (the trapezius as the splenii slide under it)
+			// has few of its vertices inside them, so putting those back out doesn't lift it
+			const lieOn = [...(def.over ?? []), ...(def.beneath ?? [])];
 			const partners: Partner[] = [
-				...[...o.beneath, ...(def.beside ?? [])].map((p) => ({ mesh: p, how: 'out' as const })),
-				...(def.over ?? []).map((p) => ({ mesh: p, how: 'above' as const })),
+				...[...o.beneath, ...(def.beside ?? [])].filter((p) => !lieOn.includes(p)).map((p) => ({ mesh: p, how: 'out' as const })),
+				...lieOn.map((p) => ({ mesh: p, how: 'above' as const })),
 				...o.under.map((p) => ({ mesh: p, how: 'below' as const }))
 			].filter((p) => this.sys.has(p.mesh)).map((p) => {
 				const pm = this.sys.meshes.find((x) => x.name === p.mesh)!, cols = new Columns(P.get(p.mesh)!, pm.index), R = m.rest, W0 = this.sys.solver.bones;

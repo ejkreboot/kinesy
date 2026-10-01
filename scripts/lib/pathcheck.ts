@@ -24,6 +24,10 @@ import { hipPaths } from '../../src/joints/hip/paths';
 import { hipRig } from '../../src/joints/hip/rig';
 import { kneePaths } from '../../src/joints/knee/paths';
 import { kneeRig } from '../../src/joints/knee/rig';
+import { jawPaths } from '../../src/joints/jaw/paths';
+import { jawRig } from '../../src/joints/jaw/rig';
+import { neckPaths } from '../../src/joints/neck/paths';
+import { neckRig } from '../../src/joints/neck/rig';
 import type { BakeAxisSpec } from './bake';
 
 export interface JointSpec {
@@ -42,6 +46,34 @@ export interface JointSpec {
 }
 
 export const JOINTS: Record<string, JointSpec> = {
+	jaw: {
+		rig: jawRig,
+		paths: jawPaths,
+		poses: [{}, { opening: 10 }, { opening: 15 }, { opening: 20 }, { protrusion: 4 }, { protrusion: 8 }, { lateral: 6 }, { lateral: -6 },
+			{ opening: 20, protrusion: 8 }, { opening: 20, lateral: 6 }, { protrusion: 8, lateral: -6 }],
+		sweeps: [
+			{ joint: 'opening', at: [{}, { lateral: 6 }] },
+			{ joint: 'protrusion', at: [{}, { opening: 20 }] },
+			{ joint: 'lateral', at: [{}, { opening: 20 }] }
+		],
+		// the three sliders: the mandible's own joints follow them
+		bake: [{ joint: 'opening', step: 2.5 }, { joint: 'protrusion', step: 2 }, { joint: 'lateral', step: 2 }],
+		bakeGuide: true
+	},
+	neck: {
+		rig: neckRig,
+		paths: neckPaths,
+		poses: [{}, { flexion: 40 }, { flexion: -40 }, { lateral: 30 }, { lateral: -30 }, { rotation: 60 }, { rotation: -60 },
+			{ flexion: 40, rotation: 60 }, { flexion: -40, rotation: -60 }, { lateral: 30, rotation: 60 }, { flexion: -40, lateral: -30 }],
+		sweeps: [
+			{ joint: 'flexion', at: [{}, { rotation: 60 }] },
+			{ joint: 'lateral', at: [{}, { flexion: -40 }] },
+			{ joint: 'rotation', at: [{}, { flexion: 40 }] }
+		],
+		// the three sliders: every level follows them
+		bake: [{ joint: 'flexion', step: 10 }, { joint: 'lateral', step: 10 }, { joint: 'rotation', step: 15 }],
+		bakeGuide: true
+	},
 	elbow: {
 		rig: elbowRig,
 		paths: elbowPaths,

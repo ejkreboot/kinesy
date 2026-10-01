@@ -33,8 +33,10 @@ def fit_axes(cfg, src, axes_path, refit):
     out = {'_frame': 'BodyParts3D source frame (mm). Fitted by pipeline/lib/axes.py; regenerate with --refit-axes.'}
     if hasattr(cfg, 'fit_axes'):  # joints whose axes share one frame fit them all at once
         for name, ax in cfg.fit_axes(src).items():
-            print(f'  axis {name:18s} point {np.round(ax["point"], 1)} dir {np.round(ax["dir"], 3)} rest {ax.get("rest", 0):6.1f}')
             out[name] = ax
+            if name.startswith('_'):  # fitted data that isn't an axis (the jaw's condylar path)
+                continue
+            print(f'  axis {name:18s} point {np.round(ax["point"], 1)} dir {np.round(ax["dir"], 3)} rest {ax.get("rest", 0):6.1f}')
     for name, spec in cfg.AXES.items():
         point, d, err = FITTERS[spec['fit']](src, spec)
         print(f'  axis {name:10s} point {np.round(point, 2)} dir {np.round(d, 3)} residual {err:.3f}')

@@ -735,14 +735,16 @@ export class PathSolver {
 		const raw = Math.atan2(dot(c, tN), dot(rN, target));
 		const phi = (this.twistAngle[s] += wrapPi(raw - this.twistAngle[s]));
 		const Q = this.quat;
-		// a fan's roll comes from the fan (rollSheets), not from its ends' twist
+		// a fan's roll comes from the fan (rollSheets), not from its ends' twist; a muscle held to the body takes only
+		// its share of it (MusclePathDef.twist)
 		const fan = this.muscles[st.muscle].def.fan === true && this.muscles[st.muscle].count > 1;
+		const share = this.muscles[st.muscle].def.twist ?? 1;
 		let px = 0, py = 0, pz = 0, pw = 1;
 		for (let i = 0; i < N; i++) {
 			const o = i * 3;
 			const t: Vec3 = [T[o], T[o + 1], T[o + 2]];
 			let r: Vec3 = [Rn[o], Rn[o + 1], Rn[o + 2]];
-			const a = fan ? 0 : phi * st.twist[i];
+			const a = fan ? 0 : phi * share * st.twist[i];
 			if (a !== 0) {
 				const b = cross(t, r), ca = Math.cos(a), sa = Math.sin(a);
 				r = [r[0] * ca + b[0] * sa, r[1] * ca + b[1] * sa, r[2] * ca + b[2] * sa];

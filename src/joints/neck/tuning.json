@@ -1,0 +1,17 @@
+{
+	"lattice": [
+		{
+			"joint": "flexion",
+			"step": 20
+		},
+		{
+			"joint": "lateral",
+			"step": 15
+		},
+		{
+			"joint": "rotation",
+			"step": 30
+		}
+	],
+	"keys": {}
+}
