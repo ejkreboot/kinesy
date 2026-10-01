@@ -16,7 +16,7 @@ function forearm(p: number): string {
 export const elbow: JointModule = {
 	id: 'elbow',
 	title: 'Elbow Movers',
-	subtitle: 'Right arm · anterolateral view · drag to rotate',
+	subtitle: 'Right arm · anterolateral view · drag to rotate · shift-drag to pan',
 	assets: { manifest: manifest as unknown as AssetManifest, geometry: geometryUrl, fields: fieldsUrl },
 	rig: elbowRig,
 	paths: elbowPaths,

@@ -4,13 +4,16 @@
  *      joint axis instead of collapsing across the chord, as linear blending does);
  *   2. constant-volume bulge: a muscle's belly scales radially with (length / rest length)^-1/2,
  *      weighted by its own cross-section profile so tendons stay thin;
- *   3. bone collision: vertices pushed deeper into a bone than they sit at rest are projected
+ *   3. hand tuning (core/muscle/tune.ts), if set: roll, lift, shift and belly length about the muscle's
+ *      skinned centerline, as the path solver does about a strand, peaking mid-way along it;
+ *   4. bone collision: vertices pushed deeper into a bone than they sit at rest are projected
  *      out along the bone's distance-field gradient, then the correction is smoothed over
  *      neighbouring vertices and re-projected, so tissue wraps instead of denting.
  *
  * Pure TypeScript, no DOM or three.js dependency; runs in the browser and in Node.
  */
 import { qMul, qRotate, qToMat3, rigidToMat4, type Quat, type Rigid, type Vec3 } from './math';
+import { bump, NO_TUNE, type Tuner } from './muscle/tune';
 import type { Pose, Rig } from './rig';
 import { sdfGradient, sdfSample, SDF_FAR } from './sdf';
 import type { JointAssets, MuscleMesh, SdfGrid } from './types';
@@ -125,6 +128,11 @@ class MuscleState {
 	readonly cand: Uint8Array;
 	/** current bulge factor */
 	k = 1;
+	/** for tuning: the bone nearest the centerline's middle at rest, and its outward direction there (rest frame) */
+	readonly outBone: number;
+	readonly outward: Vec3;
+	/** +1 if the centerline runs from origin to insertion (from a bone nearer the rig's root), else −1 */
+	readonly dir: number;
 
 	constructor(mesh: MuscleMesh, nb: number, fields: (SdfGrid | null)[], opts: DeformerOptions) {
 		this.mesh = mesh;
@@ -184,6 +192,19 @@ class MuscleState {
 		this.candStart = candStart;
 		this.cand = Uint8Array.from(cand);
 
+		// outward from the nearest bone at the centerline's middle; direction from its more proximal end
+		const mid = c.C[NB >> 1];
+		let ob = -1, od = Infinity;
+		fields.forEach((g, b) => {
+			const d = g ? sdfSample(g, mid[0], mid[1], mid[2]) : Infinity;
+			if (d < od) { od = d; ob = b; }
+		});
+		const gr = ob >= 0 ? sdfGradient(fields[ob]!, mid[0], mid[1], mid[2]) : null;
+		this.outBone = Math.max(0, ob);
+		this.outward = gr ? [gr[0], gr[1], gr[2]] : [0, 0, 1];
+		const lead = (k: number) => c.W[k].reduce((bi, w, b, W) => (w > W[bi] ? b : bi), 0);
+		this.dir = lead(0) > lead(NB - 1) ? -1 : 1;
+
 		this.base = new Float32Array(nv * 3);
 		this.delta = new Float32Array(nv * 3);
 		this.tmp = new Float32Array(nv * 3);
@@ -201,6 +222,9 @@ export class Deformer {
 	private readonly bones: BoneState[];
 	private readonly states: MuscleState[];
 	private readonly byName: Map<string, MuscleState>;
+	private tuner: Tuner | null = null;
+	private pose: Pose = {};
+	private readonly tune = { ...NO_TUNE };
 
 	constructor(assets: JointAssets, rig: Rig, opts: Partial<DeformerOptions> = {}) {
 		this.opts = { ...DEFAULT_DEFORMER_OPTIONS, ...opts };
@@ -225,8 +249,14 @@ export class Deformer {
 		return rigidToMat4({ q: s.R, t: s.T });
 	}
 
+	/** Hand-tuned keys to apply (or none). */
+	setTuner(tuner: Tuner | null): void {
+		this.tuner = tuner;
+	}
+
 	/** Deform every muscle into `out` (one position array per muscle mesh name). */
 	update(pose: Pose, out: Record<string, Float32Array>): void {
+		this.pose = pose;
 		this.setTransforms(this.rig.solve(pose));
 		for (const s of this.states) this.skinCenterline(s);
 		this.stats.pushed = 0;
@@ -357,6 +387,61 @@ export class Deformer {
 		return moved;
 	}
 
+	/**
+	 * Hand tuning about the skinned centerline (into s.base): each vertex rolled about the centerline's tangent
+	 * where it lies, moved along the centerline toward its middle (belly length: the ends stay, the belly
+	 * shortens and thickens), and lifted off the bone and shifted sideways, all by bump(t) at its share t of the
+	 * centerline. As PathSolver.applyTuning: lift along the outward direction, shift along −(tangent × outward).
+	 */
+	private applyTuning(s: MuscleState, t: { roll: number; lift: number; shift: number; length: number }): void {
+		const { nv } = s.mesh, base = s.base, NB = s.bins, Cs = s.centerSkinned, last = NB - 1, mid = last / 2;
+		const O = qRotate(this.bones[s.outBone].R, s.outward), thick = 1 / Math.sqrt(Math.max(0.25, t.length)) - 1;
+		const at = (u: number, o: Float64Array, j: number) => {
+			const k = Math.min(NB - 2, Math.max(0, Math.floor(u))), f = Math.min(1, Math.max(0, u - k)), a = k * 3, b = a + 3;
+			for (let c = 0; c < 3; c++) o[j + c] = Cs[a + c] + (Cs[b + c] - Cs[a + c]) * f;
+			for (let c = 0; c < 3; c++) o[j + 3 + c] = (Cs[b + c] - Cs[a + c]) * s.dir;
+		};
+		const q = new Float64Array(12);
+		for (let i = 0; i < nv; i++) {
+			const u = s.u[i], w = bump(u / last);
+			if (w <= 0) continue;
+			const o = i * 3;
+			at(u, q, 0);
+			let tx = q[3], ty = q[4], tz = q[5];
+			const tl = Math.hypot(tx, ty, tz) || 1;
+			tx /= tl; ty /= tl; tz /= tl;
+			// offset from the centerline, across it
+			let rx = base[o] - q[0], ry = base[o + 1] - q[1], rz = base[o + 2] - q[2];
+			const ax = rx * tx + ry * ty + rz * tz;
+			rx -= ax * tx; ry -= ax * ty; rz -= ax * tz;
+			if (t.roll !== 0) {
+				// right-handed about the tangent (Rodrigues; r ⟂ t)
+				const h = (t.roll * w * Math.PI) / 180, c = Math.cos(h), sn = Math.sin(h);
+				const cx = ty * rz - tz * ry, cy = tz * rx - tx * rz, cz = tx * ry - ty * rx;
+				const nx = rx * c + cx * sn, ny = ry * c + cy * sn, nz = rz * c + cz * sn;
+				base[o] += nx - rx; base[o + 1] += ny - ry; base[o + 2] += nz - rz;
+				rx = nx; ry = ny; rz = nz;
+			}
+			if (t.length !== 1) {
+				// along the centerline toward its middle, and thicker across it
+				at(u + (t.length - 1) * (u - mid) * w, q, 6);
+				const g = thick * w;
+				base[o] += q[6] - q[0] + rx * g; base[o + 1] += q[7] - q[1] + ry * g; base[o + 2] += q[8] - q[2] + rz * g;
+			}
+			if (t.lift !== 0 || t.shift !== 0) {
+				// outward made square to the tangent here, and the side direction
+				const od = O[0] * tx + O[1] * ty + O[2] * tz;
+				let ux = O[0] - od * tx, uy = O[1] - od * ty, uz = O[2] - od * tz;
+				const ul = Math.hypot(ux, uy, uz) || 1;
+				ux /= ul; uy /= ul; uz /= ul;
+				const sx = ty * uz - tz * uy, sy = tz * ux - tx * uz, sz = tx * uy - ty * ux;
+				base[o] += w * (t.lift * ux - t.shift * sx);
+				base[o + 1] += w * (t.lift * uy - t.shift * sy);
+				base[o + 2] += w * (t.lift * uz - t.shift * sz);
+			}
+		}
+	}
+
 	private deformMuscle(s: MuscleState, out: Float32Array): void {
 		const { nv, rest: R, centerline: c } = s.mesh;
 		const base = s.base, NB = s.bins, Cs = s.centerSkinned, sw = s.skinWeights;
@@ -381,6 +466,7 @@ export class Deformer {
 			base[o] += rx * g; base[o + 1] += ry * g; base[o + 2] += rz * g;
 		}
 
+		if (this.tuner?.has(s.mesh.name)) this.applyTuning(s, this.tuner.at(s.mesh.name, this.pose, this.tune));
 		out.set(base);
 		if (!this.opts.collide) return;
 

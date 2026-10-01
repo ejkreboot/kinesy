@@ -22,6 +22,8 @@ import { shoulderPaths } from '../../src/joints/shoulder/paths';
 import { shoulderRig } from '../../src/joints/shoulder/rig';
 import { hipPaths } from '../../src/joints/hip/paths';
 import { hipRig } from '../../src/joints/hip/rig';
+import { kneePaths } from '../../src/joints/knee/paths';
+import { kneeRig } from '../../src/joints/knee/rig';
 import type { BakeAxisSpec } from './bake';
 
 export interface JointSpec {
@@ -84,6 +86,19 @@ export const JOINTS: Record<string, JointSpec> = {
 		],
 		// a ball joint, gridded over all three of its angles
 		bake: [{ joint: 'flexion', step: 10 }, { joint: 'abduction', step: 5 }, { joint: 'rotation', step: 5 }],
+		bakeGuide: true
+	},
+	knee: {
+		rig: kneeRig,
+		paths: kneePaths,
+		poses: [{}, { flexion: 30 }, { flexion: 50 }, { flexion: 70 }, { flexion: -5 },
+			{ flexion: 70, rotation: 25 }, { flexion: 70, rotation: -30 }, { flexion: 45, rotation: -30 }, { flexion: 45, rotation: 25 }],
+		sweeps: [
+			{ joint: 'flexion', at: [{}, { rotation: 25 }, { rotation: -30 }] },
+			{ joint: 'rotation', at: [{ flexion: 70 }, { flexion: 45 }] }
+		],
+		// a hinge with rotation: two slider axes (the patella follows flexion)
+		bake: [{ joint: 'flexion', step: 5 }, { joint: 'rotation', step: 5 }],
 		bakeGuide: true
 	}
 };

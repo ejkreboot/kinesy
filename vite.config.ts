@@ -21,6 +21,11 @@ function tuningSave(): Plugin {
 			j.again = true;
 			return;
 		}
+		// a joint without mesh corrections (no bake: the hand) has none to re-solve
+		if (!existsSync(resolve(__dirname, 'assets', joint, 'corrections.bin.gz'))) {
+			j.last = { ok: true, at: Date.now(), message: `${joint}: nothing to correct` };
+			return;
+		}
 		Object.assign(j, { running: true, again: false, started: Date.now() });
 		const child = spawn(tsx, ['scripts/correct.ts', joint, '--existing'], { cwd: __dirname });
 		let tail = '';

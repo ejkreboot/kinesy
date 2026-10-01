@@ -109,7 +109,7 @@ export function obstaclePaths(paths: JointPaths, baked: BakedPaths): JointPaths 
 export function obstaclesOf(J: LoadedJoint, paths: JointPaths, mesh: string): { beneath: string[]; under: string[] } {
 	const def = paths.muscles.find((m) => m.mesh === mesh)!, over = def.over ?? [];
 	const under = paths.muscles.filter((m) => m.over?.includes(mesh)).map((m) => m.mesh);
-	const lower = paths.muscles.filter((m) => m.layer < def.layer && !over.includes(m.mesh) && !under.includes(m.mesh)).map((m) => m.mesh);
+	const lower = paths.muscles.filter((m) => m.layer < def.layer && m.obstacle !== false && !over.includes(m.mesh) && !under.includes(m.mesh)).map((m) => m.mesh);
 	return { beneath: touching({ J }, mesh, lower), under };
 }
 
@@ -149,7 +149,7 @@ export interface BandState {
  */
 export class ChainBaker {
 	readonly ctx: RouteContext;
-	readonly jobs: { which: Which; fixed: PathPoint[]; model: BandModel; frame: number }[];
+	readonly jobs: { which: Which; fixed: PathPoint[]; model: BandModel; frame: number; collide?: string[] }[];
 	private readonly W0: Rigid[];
 
 	constructor(J: LoadedJoint, paths: JointPaths, obstacles: JointPaths, readonly axes: BakedAxis[], which: Which[], readonly c: number) {
@@ -158,8 +158,8 @@ export class ChainBaker {
 		this.jobs = which.map((w) => {
 			const def = paths.muscles.find((m) => m.mesh === w.mesh)!;
 			const fixed = def.strands[w.k].filter(isPoint) as PathPoint[];
-			const model = bandModel(this.ctx, w.mesh, fixed, { ...obstaclesOf(J, paths, w.mesh), guide: J.spec.bakeGuide });
-			return { which: w, fixed, model, frame: model.bones[model.bones.length - 1] };
+			const model = bandModel(this.ctx, w.mesh, fixed, { ...obstaclesOf(J, paths, w.mesh), guide: J.spec.bakeGuide, collide: def.collide });
+			return { which: w, fixed, model, frame: model.bones[model.bones.length - 1], collide: def.collide };
 		});
 		if (axes.some((a) => !a.values.includes(this.ctx.restPose[a.joint]))) throw new Error('every bake axis needs its rest angle as a grid value');
 	}
@@ -215,11 +215,11 @@ export class ChainBaker {
 
 	/** How far a band comes inside its clearance from bone, beyond its end ramps: [mm, bone index]. */
 	squeeze(k: number, s: BandState): [number, number] {
-		const pts = resampleBand(flat(s.bands)), clear = this.jobs[k].model.clear;
+		const pts = resampleBand(flat(s.bands)), clear = this.jobs[k].model.clear, keepOff = this.jobs[k].collide;
 		let worst: [number, number] = [0, -1];
 		for (let i = 4; i < M - 4; i++)
 			this.ctx.fields.forEach((g, b) => {
-				if (!g) return;
+				if (!g || (keepOff && !keepOff.includes(this.ctx.J.manifest.bones[b]))) return;
 				const l = boneLocal(s.bones[b], pts[i][0], pts[i][1], pts[i][2]), short = clear - sdfSample(g, l[0], l[1], l[2]);
 				if (short > worst[0]) worst = [short, b];
 			});

@@ -13,6 +13,7 @@ import { benchDeformation } from './viewer/bench';
 import { JointModel } from './viewer/model';
 import { PathDebug } from './viewer/pathDebug';
 import { TunePanel } from './ui/tune';
+import { Tuner } from './core/muscle/tune';
 import { withBaked } from './core/muscle/baked';
 import { PathSolver } from './core/muscle/path';
 import { Stage } from './viewer/stage';
@@ -55,6 +56,10 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 	const paths = joint.paths && assets.baked && new URLSearchParams(location.search).has('baked') ? withBaked(joint.paths, assets.baked) : joint.paths;
 	if (paths !== joint.paths) debug.msg(`baked: ${paths!.muscles.filter((m) => m.baked).map((m) => m.mesh).join(', ')}`);
 	const model = new JointModel(stage, assets, rig, joint.muscles, joint.deformer, paths);
+	// hand-tuned keys for muscles without lines of action (the hand), applied by the CPU deformer; those on
+	// lines of action have theirs in the path solver
+	const skinTuner = !model.muscleSystem?.tuner && joint.tuning ? new Tuner(joint.tuning, rig) : null;
+	model.deformer.setTuner(skinTuner);
 	model.onPosed = (ms) => debug.posed(ms);
 	for (const a of joint.axisOverlays) model.addAxis(a.joint, a.color, a.length, a.offset);
 	stage.setView(joint.view);
@@ -134,16 +139,21 @@ export async function mountJoint(joint: JointModule): Promise<MountedJoint> {
 					stage.requestRender();
 				})
 			);
-		// hand tuning: keys per muscle at lattice poses, live; saved to the joint's tuning.json
-		const tuner = model.muscleSystem.tuner;
+	}
+	// #debug, hand tuning: keys per muscle at lattice poses, live; saved to the joint's tuning.json. Muscles on
+	// lines of action are tuned by the path solver; a joint without them (the hand) by the CPU deformer
+	if (location.hash === '#debug') {
+		const sys = model.muscleSystem, tuner = sys?.tuner ?? skinTuner;
+		const meshes = sys?.tuner ? sys.meshes.map((m) => m.name) : assets.muscles.map((m) => m.name);
 		if (tuner) {
+			const t = tuner;
 			const label = (mesh: string) => {
 				const m = joint.muscles.find((x) => x.meshes.includes(mesh));
 				return m ? (m.heads?.[mesh] ? `${m.name} (${m.heads[mesh]})` : m.name) : mesh;
 			};
 			const rest = Object.fromEntries(rig.def.joints.map((j) => [j.id, j.restAngle]));
 			const panel = new TunePanel(
-				tuner, model.muscleSystem.meshes.map((m) => ({ mesh: m.name, label: label(m.name) })), joint.id, rest,
+				t, meshes.map((mesh) => ({ mesh, label: label(mesh) })), joint.id, rest,
 				() => model.pose,
 				(p) => { animator.cancel(); model.setPose(p); sync(); },
 				() => model.setPose({})

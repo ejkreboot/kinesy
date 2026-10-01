@@ -136,7 +136,24 @@ def _distal_center(m):
     return (low[low[:, 0].argmin()] + low[low[:, 0].argmax()]) / 2
 
 
-CENTERS = {'humeral_head': _humeral_head, 'femoral_head': _femoral_head, 'clavicle_medial_end': _clavicle_medial_end,
+def _femoral_epicondyles(fixed, moving):
+    """Midpoint of the femur's (the fixed bone's) epicondyles: the knee's transepicondylar flexion axis."""
+    return _distal_center(fixed)
+
+
+def _tibial_plateau(fixed, moving):
+    """Centre of the tibial plateau: the top 12 mm of the tibia."""
+    V = moving.vertices
+    return V[V[:, 2] > V[:, 2].max() - 12].mean(0)
+
+
+def _tibial_ankle(m):
+    """Centre of the tibia's distal end (plafond and medial malleolus): its lowest 30 mm."""
+    return m.vertices[m.vertices[:, 2] < m.bounds[0][2] + 30].mean(0)
+
+
+CENTERS = {'humeral_head': _humeral_head, 'femoral_head': _femoral_head, 'femoral_epicondyles': _femoral_epicondyles,
+           'tibial_plateau': _tibial_plateau, 'clavicle_medial_end': _clavicle_medial_end,
            'acromioclavicular': _acromioclavicular}
 
 TIPS = {
@@ -150,10 +167,16 @@ def anatomical(src, spec):
     fixed = src.load(spec['fixed']) if 'fixed' in spec else None
     moving = src.load(spec['moving'])
     point = CENTERS[spec['center']](fixed, moving)
+    if 'offset' in spec:
+        # a pivot fitted against the bones elsewhere, given relative to the landmark (source frame, mm)
+        point = point + np.asarray(spec['offset'], float)
     d = spec['dir']
     if d in ('humeral_shaft', 'femoral_shaft'):
         # the head's centre to the midpoint between the distal condyles / epicondyles: the bone's long axis
         d = point - _distal_center(moving)
+    elif d == 'tibial_shaft':
+        # the plateau's centre to the ankle's: the tibia's long axis
+        d = point - _tibial_ankle(moving)
     elif d == 'plane_normal':
         S = sample(moving, 30000)
         d = np.linalg.svd(S - S.mean(0), full_matrices=False)[2][2]

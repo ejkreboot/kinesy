@@ -1,0 +1,208 @@
+{
+	"lattice": [
+		{
+			"joint": "flexion",
+			"step": 30
+		},
+		{
+			"joint": "rotation",
+			"step": 15
+		}
+	],
+	"keys": {
+		"plantaris": [
+			{
+				"pose": {
+					"flexion": 60,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -23,
+				"shift": 17.5,
+				"length": 0.97
+			},
+			{
+				"pose": {
+					"flexion": 30,
+					"rotation": 0
+				},
+				"roll": 28,
+				"lift": -18.5,
+				"shift": 2.5,
+				"length": 1.03
+			}
+		],
+		"gastroc_lat": [
+			{
+				"pose": {
+					"flexion": 30,
+					"rotation": 0
+				},
+				"roll": 10,
+				"lift": 8,
+				"shift": -7,
+				"length": 1.02
+			},
+			{
+				"pose": {
+					"flexion": 70,
+					"rotation": 0
+				},
+				"roll": 19,
+				"lift": 20.5,
+				"shift": 1,
+				"length": 1.06
+			},
+			{
+				"pose": {
+					"flexion": 60,
+					"rotation": 0
+				},
+				"roll": 8,
+				"lift": 8,
+				"shift": -6,
+				"length": 0.92
+			}
+		],
+		"gastroc_med": [
+			{
+				"pose": {
+					"flexion": 30,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -9.5,
+				"shift": 1.5,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 60,
+					"rotation": 0
+				},
+				"roll": -54,
+				"lift": -7,
+				"shift": 4.5,
+				"length": 0.97
+			},
+			{
+				"pose": {
+					"flexion": 70,
+					"rotation": 0
+				},
+				"roll": -27,
+				"lift": -6,
+				"shift": 16,
+				"length": 0.96
+			}
+		],
+		"semimem": [
+			{
+				"pose": {
+					"flexion": 30,
+					"rotation": 0
+				},
+				"roll": 18,
+				"lift": 18.5,
+				"shift": 5,
+				"length": 0.9
+			},
+			{
+				"pose": {
+					"flexion": 60,
+					"rotation": 0
+				},
+				"roll": 13,
+				"lift": -2.5,
+				"shift": 14.5,
+				"length": 0.98
+			},
+			{
+				"pose": {
+					"flexion": 70,
+					"rotation": 0
+				},
+				"roll": -2,
+				"lift": 5,
+				"shift": 21,
+				"length": 1.04
+			}
+		],
+		"semiten": [
+			{
+				"pose": {
+					"flexion": -5,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": -10,
+				"shift": 0,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 30,
+					"rotation": 0
+				},
+				"roll": -15,
+				"lift": 0,
+				"shift": -4.5,
+				"length": 0.91
+			},
+			{
+				"pose": {
+					"flexion": 60,
+					"rotation": 0
+				},
+				"roll": -76,
+				"lift": -25,
+				"shift": -0.5,
+				"length": 0.85
+			},
+			{
+				"pose": {
+					"flexion": 70,
+					"rotation": 0
+				},
+				"roll": -90,
+				"lift": -25,
+				"shift": 1.5,
+				"length": 1.01
+			}
+		],
+		"gracilis": [
+			{
+				"pose": {
+					"flexion": 60,
+					"rotation": 0
+				},
+				"roll": -20,
+				"lift": 2,
+				"shift": 5,
+				"length": 1
+			},
+			{
+				"pose": {
+					"flexion": 70,
+					"rotation": 0
+				},
+				"roll": 22,
+				"lift": 8,
+				"shift": -3.5,
+				"length": 0.97
+			}
+		],
+		"sartorius": [
+			{
+				"pose": {
+					"flexion": 70,
+					"rotation": 0
+				},
+				"roll": 0,
+				"lift": 4.5,
+				"shift": 0,
+				"length": 0.84
+			}
+		]
+	}
+}

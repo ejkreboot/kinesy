@@ -1,0 +1,11 @@
+{
+	"lattice": [
+		{ "joint": "wristFlexion", "step": 35 },
+		{ "joint": "wristDeviation", "step": 20 },
+		{ "joint": "mcp", "step": 45 },
+		{ "joint": "pip", "step": 50 },
+		{ "joint": "dip", "step": 45 },
+		{ "joint": "opposition", "step": 50 }
+	],
+	"keys": {}
+}

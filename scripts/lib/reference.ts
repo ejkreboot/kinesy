@@ -23,6 +23,11 @@
  * a joint space) the band keeps to the middle of the gap, squeezed, rather than being pushed out of its
  * side, where it hooked round the acromion's edge and stayed hooked.
  *
+ * Each pass pulls the band straight and pushes it off the bones: at most PUSH toward its clearance, but
+ * always at least back out to a bone's surface. With the push capped alone, a band bent sharply round a bone
+ * (the quadriceps tendon over the trochlea in deep flexion) settled inside it, where the straightening pull
+ * and the capped push balanced.
+ *
  * Limits: a muscle's thickness is one number (the median over its mesh), not measured toward each
  * obstacle.
  */
@@ -193,6 +198,8 @@ export interface Band {
 export interface ReferenceOptions {
 	/** clearance from obstacles, mm; default the muscle's half-thickness */
 	clear?: number;
+	/** bones (names) the band keeps off; default all (MusclePathDef.collide: a sheet set into the patella isn't kept off it) */
+	collide?: string[];
 	/** muscles to keep off; default those beneath it (musclesBeneath) */
 	beneath?: string[];
 	/**
@@ -285,6 +292,8 @@ export interface BandModel {
 export function bandModel(ctx: RouteContext, mesh: string, fixed: PathPoint[], opts: ReferenceOptions = {}): BandModel {
 	const { J } = ctx, bi = (n: string) => J.manifest.bones.indexOf(n);
 	const clear = opts.clear ?? halfThickness(ctx, mesh);
+	// the bone fields the band keeps off
+	const fields = opts.collide ? ctx.fields.map((g, b) => (opts.collide!.includes(J.manifest.bones[b]) ? g : null)) : ctx.fields;
 	const beneath = opts.beneath ?? musclesBeneath(ctx, mesh), under = opts.under ?? [], obstacles = [...beneath, ...under];
 	const surfaces = ctx.surfaces;
 	const deepOf = new Map(under.map((m) => [m, deepSurface(ctx, m)]));
@@ -326,7 +335,7 @@ export function bandModel(ctx: RouteContext, mesh: string, fixed: PathPoint[], o
 					const idx = off + j, x = X[j], need = clear * r[idx];
 					// the bones within the clearance, and their outward directions
 					near.length = 0;
-					ctx.fields.forEach((g, b) => {
+					fields.forEach((g, b) => {
 						if (!g) return;
 						const l = boneLocal(bones[b], x[0], x[1], x[2]), d = sdfSample(g, l[0], l[1], l[2]);
 						if (d >= need || d >= SDF_FAR - 1) return;
@@ -344,7 +353,8 @@ export function bandModel(ctx: RouteContext, mesh: string, fixed: PathPoint[], o
 							B.need = Math.min(B.need, mid);
 						}
 					for (const o of near) {
-						const s = Math.min(PUSH, o.need - o.d);
+						// out of the bone in full (unless squeezed in a gap), then toward the clearance a step at a time
+						const s = Math.max(Math.min(PUSH, o.need - o.d), o.need >= 0 ? -o.d : 0);
 						if (s > 0) for (let c = 0; c < 3; c++) x[c] += o.w[c] * s;
 					}
 					if (surf) for (const m of beneath) {
@@ -416,7 +426,7 @@ export function bandModel(ctx: RouteContext, mesh: string, fixed: PathPoint[], o
 		const pts = flat(bands), contacts: Band['contacts'] = [];
 		const surf = beneath.length ? surfaces.at(q, beneath) : null;
 		for (const x of pts) {
-			ctx.fields.forEach((g, b) => {
+			fields.forEach((g, b) => {
 				if (!g) return;
 				const l = boneLocal(W[b], x[0], x[1], x[2]);
 				if (sdfSample(g, l[0], l[1], l[2]) < clear + 0.5) contacts.push({ on: b, local: l });

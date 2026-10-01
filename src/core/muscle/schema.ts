@@ -159,6 +159,11 @@ export interface MusclePathDef {
 	 * the bake finds the way between them that stays off the bones. Default false.
 	 */
 	baked?: boolean;
+	/**
+	 * whether the bake keeps other muscles' lines of action off this mesh where it lies beneath them; false for a
+	 * thin sheet they meet rather than lie on (the quadriceps' aponeurosis). Default true.
+	 */
+	obstacle?: boolean;
 	/** bones the mesh is kept outside of (at most 4); default: every bone with a distance field */
 	collide?: string[];
 	/** mesh whose path length sets this one's bulge (a head that ends at a shared tendon) */

@@ -27,7 +27,7 @@ const views: NamedView[] = [
 export const shoulder: JointModule = {
 	id: 'shoulder',
 	title: 'Shoulder Movers',
-	subtitle: 'Right shoulder · drag to rotate',
+	subtitle: 'Right shoulder · drag to rotate · shift-drag to pan',
 	assets: { manifest: manifest as unknown as AssetManifest, geometry: geometryUrl, fields: fieldsUrl, baked: bakedUrl, corrections: correctionsUrl },
 	rig: shoulderRig,
 	paths: shoulderPaths,

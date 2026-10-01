@@ -96,6 +96,9 @@ def build(joint: str, refit: bool):
     min_frac = getattr(cfg, 'MIN_COMPONENT_FRAC', None)
     for name, fma, attach in cfg.MUSCLES:
         m = src.load(fma)
+        # a joint may trim a mesh first (the quadriceps end at the patella; joints/knee.py)
+        if hasattr(cfg, 'clip_muscle'):
+            m = cfg.clip_muscle(name, m, src)
         if min_frac:
             m = drop_fragments(m, min_frac)
         m = decimate(m, faces_by_name.get(name, cfg.MUSCLE_FACES))
@@ -104,6 +107,10 @@ def build(joint: str, refit: bool):
              else proximity_weights(m.vertices, m.faces, trees, allowed[name], nb))
         muscles[name] = (m, W)
     muscles = couple(muscles, allowed)
+    # tissue the sources lack, built from the bones with its own skin weights (the patellar tendon sheet)
+    if hasattr(cfg, 'tissues'):
+        for name, m, W in cfg.tissues(src, bone_id):
+            muscles[name] = (m, W)
     for name, (m, W) in muscles.items():
         print(f'  {name:16s} faces {len(m.faces):5d}  mean weights {np.round(W.mean(0), 2)}')
 

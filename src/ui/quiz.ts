@@ -69,8 +69,9 @@ export class QuizPanel implements Panel {
 		else this.render(false);
 	}
 
+	/** the joint's muscles (not the connective tissue listed with them) */
 	private get muscles(): MuscleInfo[] {
-		return this.ctx.joint.muscles;
+		return this.ctx.joint.muscles.filter((m) => !m.tissue);
 	}
 
 	next(): void {

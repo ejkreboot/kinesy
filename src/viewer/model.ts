@@ -22,6 +22,8 @@ export interface PickHit {
 }
 
 const BONE_COLOR = 0xe8e0cb;
+/** tendon and ligament sheets (MuscleInfo.tissue): see-through, so the bones they hold show */
+const TISSUE_OPACITY = 0.5;
 /** Layer the pick pass renders (muscle meshes only). */
 const PICK_LAYER = 7;
 
@@ -85,7 +87,10 @@ export class JointModel {
 			const key = this.owner.get(m.name);
 			if (!key) throw new Error(`Mesh ${m.name} is not assigned to a muscle`);
 			const g = geometry(new Float32Array(m.rest), m.index);
-			const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(this.info.get(key)!.color), roughness: 0.55, metalness: 0, transparent: true });
+			// tendon and ligament (tissue) glossier than muscle, and see-through
+			const info = this.info.get(key)!;
+			const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(info.color), roughness: info.tissue ? 0.32 : 0.55, metalness: 0, transparent: true });
+			if (info.tissue) Object.assign(mat, { opacity: TISSUE_OPACITY, depthWrite: false });
 			const mesh = new THREE.Mesh(g, mat);
 			mesh.userData = { muscle: key, part: m.name };
 			const bound = sys && gpu ? sys.bound[sys.meshes.findIndex((x) => x.name === m.name)] ?? null : null;
@@ -215,17 +220,19 @@ export class JointModel {
 	private applyLook(): void {
 		const f = this.focus;
 		for (const [part, mesh] of this.muscleMeshes) {
-			const key = this.owner.get(part)!;
-			const lit = !f || (f.parts ? f.parts.includes(part) : (f.muscles ?? []).includes(key));
+			const key = this.owner.get(part)!, info = this.info.get(key)!, tissue = !!info.tissue;
+			const focused = (k: string) => (f!.parts ? f!.parts.includes(part) : (f!.muscles ?? []).includes(k));
+			// tissue is lit with the muscles it follows (the aponeurosis with the quadriceps)
+			const lit = !f || focused(key) || (!f.parts && !!info.follows?.some(focused));
 			mesh.visible = this.visible.get(key)! || (!!f && lit);
-			const op = lit ? (this.xray ? 0.45 : 1) : 0.1;
+			const op = lit ? (tissue ? TISSUE_OPACITY : this.xray ? 0.45 : 1) : 0.1;
 			const mat = mesh.material;
 			mat.opacity = op;
-			mat.depthWrite = op > 0.5;
+			mat.depthWrite = !tissue && op > 0.5;
 			const glow = lit && !!f;
 			mat.emissive.set(glow ? this.info.get(key)!.color : 0x000000);
 			mat.emissiveIntensity = glow ? 0.18 : 0;
-			mesh.renderOrder = lit ? 2 : 1;
+			mesh.renderOrder = tissue ? 3 : lit ? 2 : 1;
 		}
 		this.stage.requestRender();
 	}

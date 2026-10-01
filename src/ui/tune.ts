@@ -25,7 +25,11 @@ const SLIDERS: Slider[] = [
 	{ key: 'length', label: 'Belly length', min: 0.5, max: 1.5, step: 0.01, unit: '×' }
 ];
 
-const fmt = (p: Pose) => Object.entries(p).map(([k, v]) => `${k.slice(0, 4)} ${Math.round(v)}`).join(' · ');
+/** A lattice pose, short: each joint by its first four letters, or in full where those collide (wristFlexion, wristDeviation). */
+const fmt = (p: Pose) => {
+	const ks = Object.keys(p), short = (k: string) => (ks.filter((j) => j.slice(0, 4) === k.slice(0, 4)).length > 1 ? k : k.slice(0, 4));
+	return Object.entries(p).map(([k, v]) => `${short(k)} ${Math.round(v)}`).join(' · ');
+};
 
 export class TunePanel {
 	readonly el: HTMLElement;

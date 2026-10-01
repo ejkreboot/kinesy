@@ -30,6 +30,9 @@ export class Stage {
 		this.controls.dampingFactor = 0.12;
 		this.controls.minDistance = 150;
 		this.controls.maxDistance = 2600;
+		// the wheel zooms toward the pointer, so what is under it stays in view; drag rotates, and right-drag or
+		// shift/ctrl/⌘-drag pans (OrbitControls' defaults)
+		this.controls.zoomToCursor = true;
 		this.controls.addEventListener('change', () => this.requestRender());
 		this.controls.addEventListener('start', () => this.cancelFlight());
 

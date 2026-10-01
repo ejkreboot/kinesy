@@ -26,7 +26,7 @@ const views: NamedView[] = [
 export const hip: JointModule = {
 	id: 'hip',
 	title: 'Hip Movers',
-	subtitle: 'Right hip · drag to rotate',
+	subtitle: 'Right hip · drag to rotate · shift-drag to pan',
 	assets: { manifest: manifest as unknown as AssetManifest, geometry: geometryUrl, fields: fieldsUrl, baked: bakedUrl },
 	rig: hipRig,
 	paths: hipPaths,

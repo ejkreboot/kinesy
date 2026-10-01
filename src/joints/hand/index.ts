@@ -5,6 +5,8 @@ import type { AssetManifest } from '../../core/types';
 import type { JointModule, NamedView } from '../types';
 import { movements, muscles, scenarios } from './content';
 import { reference } from './reference';
+import tuning from './tuning.json';
+import type { Tuning } from '../../core/muscle/tune';
 import { HAND_DEFORMER, HAND_REST, handRig } from './rig';
 
 const signed = (neg: string, pos: string) => (v: number) => {
@@ -25,10 +27,12 @@ const views: NamedView[] = [
 export const hand: JointModule = {
 	id: 'hand',
 	title: 'Wrist & Hand Movers',
-	subtitle: 'Right wrist and hand · drag to rotate',
+	subtitle: 'Right wrist and hand · drag to rotate · shift-drag to pan',
 	assets: { manifest: manifest as unknown as AssetManifest, geometry: geometryUrl, fields: fieldsUrl },
 	rig: handRig,
 	deformer: HAND_DEFORMER,
+	// hand-tuned keys (#debug, Tune panel), about each muscle's skinned centerline
+	tuning: tuning as Tuning,
 	controls: [
 		{ group: 'Wrist', joint: 'wristFlexion', label: 'Flexion / extension', format: signed('Ext', 'Flex'), ticks: ['Ext 70°', '', 'Flex 80°'] },
 		{ group: 'Wrist', joint: 'wristDeviation', label: 'Radial / ulnar', format: signed('Radial', 'Ulnar'), ticks: ['Radial 20°', '0°', 'Ulnar 35°'] },

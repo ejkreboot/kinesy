@@ -13,7 +13,9 @@
  *
  * File: "KBAK", u32 header length, JSON header (BakedHeader), padding to 4 bytes, then int16 data,
  * gzip-compressed as a whole. Data per strand, per point, per coordinate: the value over the grid's
- * nodes (first axis fastest), delta-encoded along that run, in units of 1/QUANT mm.
+ * nodes (first axis fastest), in units of 1/quant mm, delta-encoded: over all the nodes (files without
+ * `runs`), or restarting at each run of the first axis (`runs`), where a point far from the joint jumps by
+ * its whole sweep from the run's end to the next run's start.
  *
  * Pure TypeScript, no DOM or three.js dependency.
  */
@@ -21,8 +23,8 @@ import { qRotate, type Rigid, type Vec3 } from '../math';
 import type { Pose } from '../rig';
 import { isPoint, type JointPaths, type PathPoint } from './schema';
 
-/** int16 units per mm */
-const QUANT = 64;
+/** int16 units per mm: files written now (±1 m), and files without a `quant` (±512 mm) */
+const QUANT = 32, OLD_QUANT = 64;
 const MAGIC = 0x4b414b42; // "KBAK" little-endian
 
 export interface BakedAxis {
@@ -49,6 +51,10 @@ export interface BakedHeader {
 	/** points per strand */
 	M: number;
 	strands: BakedStrandHeader[];
+	/** int16 units per mm (OLD_QUANT if absent) */
+	quant?: number;
+	/** whether the delta encoding restarts at each run of the first axis */
+	runs?: boolean;
 }
 
 export interface BakedStrand extends BakedStrandHeader {
@@ -90,7 +96,8 @@ export function nodeCount(axes: BakedAxis[]): number {
 }
 
 export function encodeBaked(b: BakedPaths): Uint8Array {
-	const header: BakedHeader = { axes: b.axes, M: b.M, strands: b.strands.map(({ data: _d, ...h }) => h) };
+	const header: BakedHeader = { axes: b.axes, M: b.M, strands: b.strands.map(({ data: _d, ...h }) => h), quant: QUANT, runs: true };
+	const run = b.axes[0].values.length;
 	const json = new TextEncoder().encode(JSON.stringify(header));
 	const pad = (4 - ((8 + json.length) % 4)) % 4, nodes = nodeCount(b.axes);
 	const body = new Int16Array(b.strands.length * b.M * 3 * nodes);
@@ -100,8 +107,9 @@ export function encodeBaked(b: BakedPaths): Uint8Array {
 			for (let c = 0; c < 3; c++) {
 				let prev = 0;
 				for (let n = 0; n < nodes; n++) {
+					if (n % run === 0) prev = 0;
 					const v = Math.round(s.data[(n * b.M + i) * 3 + c] * QUANT);
-					if (Math.abs(v - prev) > 32767) throw new Error(`baked ${s.mesh}: value step too large to encode`);
+					if (Math.abs(v) > 32767 || Math.abs(v - prev) > 32767) throw new Error(`baked ${s.mesh}: a point ${(v / QUANT).toFixed(0)} mm from its frame bone's origin is beyond what the format holds`);
 					body[o++] = v - prev;
 					prev = v;
 				}
@@ -121,6 +129,7 @@ export function decodeBaked(buf: ArrayBuffer): BakedPaths {
 	const len = dv.getUint32(4, true), pad = (4 - ((8 + len) % 4)) % 4;
 	const h = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, len))) as BakedHeader;
 	const nodes = nodeCount(h.axes), body = new Int16Array(buf, 8 + len + pad);
+	const quant = h.quant ?? OLD_QUANT, run = h.runs ? h.axes[0].values.length : Infinity;
 	let o = 0;
 	const strands = h.strands.map((s) => {
 		const data = new Float32Array(nodes * h.M * 3);
@@ -128,8 +137,9 @@ export function decodeBaked(buf: ArrayBuffer): BakedPaths {
 			for (let c = 0; c < 3; c++) {
 				let v = 0;
 				for (let n = 0; n < nodes; n++) {
+					if (n % run === 0) v = 0;
 					v += body[o++];
-					data[(n * h.M + i) * 3 + c] = v / QUANT;
+					data[(n * h.M + i) * 3 + c] = v / quant;
 				}
 			}
 		return { ...s, data };

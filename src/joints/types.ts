@@ -1,3 +1,4 @@
+import type { Tuning } from '../core/muscle/tune';
 import type { JointAssetUrls } from '../core/load';
 import type { Vec3 } from '../core/math';
 import type { DeformerOptions } from '../core/deformer';
@@ -19,6 +20,12 @@ export interface JointModule {
 	 * CPU deformer
 	 */
 	paths?: JointPaths;
+	/**
+	 * hand-tuned keys for the muscles without lines of action, applied by the CPU deformer about their skinned
+	 * centerlines (edited in the Tune panel, #debug, and saved to the joint's tuning.json); a joint with paths
+	 * keeps its keys there (JointPaths.tuning)
+	 */
+	tuning?: Tuning;
 	/** one slider per joint degree of freedom, in display order */
 	controls: JointControl[];
 	/** muscles in list order; list groups follow first appearance of each `group` */
@@ -77,6 +84,13 @@ export interface MuscleInfo {
 	note: string;
 	/** name of a view in `JointModule.views` the muscle is visible from */
 	view?: string;
+	/**
+	 * connective tissue listed with the muscles (a tendon and ligament sheet): drawn glossier, and left out of
+	 * the quiz's muscle questions
+	 */
+	tissue?: boolean;
+	/** for tissue: the muscles (keys) it is lit and faded with as they are (a demo or a focus) */
+	follows?: string[];
 }
 
 export interface Movement {
