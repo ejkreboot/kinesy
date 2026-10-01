@@ -248,12 +248,12 @@ export const movements: Movement[] = [
 		note: 'The sternal head of pectoralis major helps only until the arm reaches the side.'
 	},
 	{
-		id: 'abduction', label: 'Abduction', range: '10° → 180°', group: ARM, from: at({ abduction: 10 }), to: { abduction: 180 },
+		id: 'abduction', label: 'Abduction', range: '10° → 160°', group: ARM, from: at({ abduction: 10 }), to: { abduction: 160 },
 		prime: ['deltoid_mid', 'supraspinatus'], assist: ['deltoid_ant'],
-		note: 'Watch the readout under the sliders: about 150° at the glenohumeral joint, 30° at the scapula.'
+		note: 'Watch the readout under the sliders: past the first 30°, about 4° at the glenohumeral joint for every 1° at the scapula (134° : 26° at 160°).'
 	},
 	{
-		id: 'adduction', label: 'Adduction', range: '180° → 10°', group: ARM, from: at({ abduction: 180 }), to: { abduction: 10 },
+		id: 'adduction', label: 'Adduction', range: '160° → 10°', group: ARM, from: at({ abduction: 160 }), to: { abduction: 10 },
 		prime: ['lat', 'teres_major', 'pec_stern'], assist: ['triceps_long', 'coracobrachialis'],
 		note: 'Against resistance (a pull-down); unresisted, gravity lowers the arm while the abductors lengthen.'
 	},
@@ -296,12 +296,12 @@ export const movements: Movement[] = [
 		prime: ['trap_middle', 'rhomboid_major', 'rhomboid_minor'], assist: ['trap_upper', 'trap_lower']
 	},
 	{
-		id: 'upwardRotation', label: 'Upward rotation', range: 'with arm raising', group: GIRDLE, from: at({ abduction: 10 }), to: { abduction: 180 },
+		id: 'upwardRotation', label: 'Upward rotation', range: 'with arm raising', group: GIRDLE, from: at({ abduction: 10 }), to: { abduction: 160 },
 		prime: ['serratus', 'trap_upper', 'trap_lower'], assist: [],
 		note: 'Shown during abduction, which drives it here. A force couple: upper trapezius pulls the acromion up, lower trapezius pulls the spine root down, serratus pulls the inferior angle forward and out.'
 	},
 	{
-		id: 'downwardRotation', label: 'Downward rotation', range: 'with arm lowering', group: GIRDLE, from: at({ abduction: 180 }), to: { abduction: 10 },
+		id: 'downwardRotation', label: 'Downward rotation', range: 'with arm lowering', group: GIRDLE, from: at({ abduction: 160 }), to: { abduction: 10 },
 		prime: ['rhomboid_major', 'rhomboid_minor', 'levator', 'pec_minor'], assist: [],
 		note: 'Shown as the arm lowers; against resistance (pull-downs) these muscles turn the glenoid back down.'
 	}

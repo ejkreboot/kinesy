@@ -38,8 +38,16 @@ const defs = meshes.map((m) => {
 	return d;
 }).sort((a, b) => a.layer - b.layer);
 
-// what is already baked on the same grid, for strands whose points haven't changed
+// what is already baked on the same grid, for strands whose points haven't changed; on a new grid (a joint's
+// range changed) everything baked is baked again, so nothing is lost
 const sameGrid = J.assets.baked && JSON.stringify(J.assets.baked.axes) === JSON.stringify(axes) && J.assets.baked.M === M;
+if (J.assets.baked && !sameGrid)
+	for (const m of new Set(J.assets.baked.strands.map((s) => s.mesh)))
+		if (!meshes.includes(m) && paths.muscles.some((d) => d.mesh === m)) {
+			meshes.push(m);
+			defs.push(paths.muscles.find((d) => d.mesh === m)!);
+		}
+if (J.assets.baked && !sameGrid) console.log(`the grid changed: baking everything again (${meshes.join(', ')})`);
 const strands: BakedStrand[] = sameGrid ? J.assets.baked!.strands.filter((s) => !meshes.includes(s.mesh)) : [];
 const current = (): BakedPaths => ({ axes, M, strands });
 const rest = Object.fromEntries(J.rig.def.joints.map((j) => [j.id, j.restAngle]));

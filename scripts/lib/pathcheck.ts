@@ -49,7 +49,7 @@ export const JOINTS: Record<string, JointSpec> = {
 		rig: shoulderRig,
 		paths: shoulderPaths,
 		poses: [
-			{}, { flexion: 90 }, { flexion: 180 }, { flexion: -10 }, { abduction: 90 }, { abduction: 180 },
+			{}, { flexion: 90 }, { flexion: 180 }, { flexion: -10 }, { abduction: 90 }, { abduction: 160 },
 			{ abduction: 90, rotation: -30 }, { abduction: 90, rotation: 70 }, { flexion: 90, rotation: 70 },
 			{ rotation: -30 }, { rotation: 70 }, { protraction: 25 }, { protraction: -25 }, { elevation: 35 },
 			{ flexion: 90, abduction: 50 }, { flexion: 90, abduction: 10, protraction: 15 }

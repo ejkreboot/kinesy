@@ -49,8 +49,9 @@ export const shoulderRig: RigDef = {
 		// 10°: further back the muscles over the front of the joint are stretched past what the model holds
 		{ id: 'flexion', axis: 'flexion', restAngle: 0, min: -10, max: 180, initial: 0 },
 		// no further in than the hanging position: past it the arm goes into the chest (and the humeral head
-		// through the muscles over it)
-		{ id: 'abduction', axis: 'abduction', restAngle: 10, min: 10, max: 180, initial: 10 },
+		// through the muscles over it). No further out than 160°: enough to show the motion, and past it the
+		// muscles over the top of the joint are crowded past what the model holds
+		{ id: 'abduction', axis: 'abduction', restAngle: 10, min: 10, max: 160, initial: 10 },
 		// + internal, − external (external only to 30°: further, the pectoralis tendon wound round the humerus)
 		{ id: 'rotation', axis: 'rotation', restAngle: 0, min: -30, max: 70, initial: 0 },
 		// shoulder girdle, measured at the sternoclavicular joint: + elevation, − depression

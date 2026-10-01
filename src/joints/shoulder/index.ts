@@ -33,7 +33,7 @@ export const shoulder: JointModule = {
 	paths: shoulderPaths,
 	controls: [
 		{ joint: 'flexion', label: 'Flexion', format: signed('Ext', 'Flex'), ticks: ['Ext 10°', '85°', 'Flex 180°'] },
-		{ joint: 'abduction', label: 'Abduction', format: signed('Add', 'Abd'), ticks: ['Abd 10°', '95°', 'Abd 180°'] },
+		{ joint: 'abduction', label: 'Abduction', format: signed('Add', 'Abd'), ticks: ['Abd 10°', '85°', 'Abd 160°'] },
 		{ joint: 'rotation', label: 'Rotation', format: signed('ER', 'IR'), ticks: ['ER 30°', '', 'IR 70°'] },
 		{ joint: 'elevation', label: 'Girdle elev / dep', format: signed('Dep', 'Elev'), ticks: ['Dep 10°', '', 'Elev 35°'] },
 		{ joint: 'protraction', label: 'Girdle pro / retract', format: signed('Retract', 'Protract'), ticks: ['Retract 25°', '0°', 'Protract 25°'] }

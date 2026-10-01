@@ -1,4 +1,6 @@
 import type { JointPaths } from '../../core/muscle/schema';
+import type { Tuning } from '../../core/muscle/tune';
+import tuning from './tuning.json';
 
 /**
  * Lines of action for the elbow's forearm rotators and brachioradialis, measured from the meshes (rest pose: 15°
@@ -154,5 +156,7 @@ export const elbowPaths: JointPaths = {
 				[{ bone: 'ulna', p: [-24.3, -213.2, 44.9] }, { wrap: 'radiusDistal' }, { bone: 'radius', p: [-63.2, -214.7, 47.1] }]
 			]
 		}
-	]
+	],
+	// hand-tuned keys, edited in the app's Tune panel (#debug) and saved to tuning.json
+	tuning: tuning as Tuning
 };

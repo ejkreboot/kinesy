@@ -130,17 +130,6 @@
 			{
 				"pose": {
 					"flexion": 0,
-					"abduction": 70,
-					"rotation": 0
-				},
-				"roll": -9,
-				"lift": -1,
-				"shift": -1.5,
-				"length": 1
-			},
-			{
-				"pose": {
-					"flexion": 0,
 					"abduction": 100,
 					"rotation": 0
 				},
@@ -152,12 +141,23 @@
 			{
 				"pose": {
 					"flexion": 0,
+					"abduction": 160,
+					"rotation": 0
+				},
+				"roll": 69,
+				"lift": -6.5,
+				"shift": -17.5,
+				"length": 1.06
+			},
+			{
+				"pose": {
+					"flexion": 0,
 					"abduction": 130,
 					"rotation": 0
 				},
-				"roll": 29,
+				"roll": 58,
 				"lift": 0,
-				"shift": 0,
+				"shift": -15,
 				"length": 1
 			}
 		],

@@ -29,13 +29,14 @@ const existing = args.includes('--existing');
 const [joint, ...named] = args.filter((a) => a !== '--existing');
 if (!joint) throw new Error('usage: correct <joint> [mesh ...] [--existing] [--H n] [--workers n]');
 const J = loadJoint(joint), baked = J.assets.baked;
-if (!baked) throw new Error(`${joint} has no bake (run scripts/bake.ts first)`);
-const bakedMeshes = [...new Set(baked.strands.map((s) => s.mesh))];
-const chosen = existing ? (J.assets.corrections?.meshes.map((m) => m.mesh) ?? []) : named.length ? named : bakedMeshes;
-if (!chosen.length) {
+// a joint without corrections (or a bake) has nothing to re-solve after tuning
+if (existing && !J.assets.corrections?.meshes.length) {
 	console.log(`${joint}: nothing to correct`);
 	process.exit(0);
 }
+if (!baked) throw new Error(`${joint} has no bake (run scripts/bake.ts first)`);
+const bakedMeshes = [...new Set(baked.strands.map((s) => s.mesh))];
+const chosen = existing ? J.assets.corrections!.meshes.map((m) => m.mesh) : named.length ? named : bakedMeshes;
 const meshes = bakeRounds(J, J.spec.paths, chosen).flat();
 const nodes = nodeCount(baked.axes), t0 = performance.now();
 const nv = meshes.map((m) => J.assets.muscles.find((x) => x.name === m)!.nv);

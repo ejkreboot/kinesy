@@ -67,7 +67,17 @@ export class Tuner {
 
 	constructor(readonly tuning: Tuning, rig: Rig) {
 		this.axes = tuning.lattice.map((l) => ({ joint: l.joint, values: latticeValues(rig, l.joint, l.step) }));
-		for (const [mesh, keys] of Object.entries(tuning.keys)) for (const k of keys) this.set(mesh, k.pose, k, false);
+		// a key off the lattice (the rig's range narrowed since it was set) is left out, and dropped at the next save
+		for (const [mesh, keys] of Object.entries(tuning.keys)) {
+			const on = keys.filter((k) => this.onLattice(k.pose));
+			if (on.length < keys.length) console.warn(`tuning: ${mesh}: ${keys.length - on.length} key(s) off the lattice left out`, keys.filter((k) => !on.includes(k)).map((k) => k.pose));
+			tuning.keys[mesh] = on;
+			for (const k of on) this.set(mesh, k.pose, k, false);
+		}
+	}
+
+	private onLattice(pose: Pose): boolean {
+		return this.axes.every((a) => a.values.includes(pose[a.joint]));
 	}
 
 	/** Lattice node of a lattice pose (its values must be lattice values). */
